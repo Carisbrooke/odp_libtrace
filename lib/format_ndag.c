@@ -34,7 +34,6 @@
 #include "format_helper.h"
 #include "format_erf.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -93,7 +92,7 @@ typedef struct streamsock {
         int bufavail;
 	int bufwaiting;
 
-#if HAVE_RECVMMSG
+#if HAVE_DECL_RECVMMSG
         struct mmsghdr mmsgbufs[RECV_BATCH_SIZE];
 #else
 	struct msghdr singlemsg;
@@ -113,7 +112,6 @@ typedef struct recvstream {
         uint64_t missing_records;
         uint64_t received_packets;
 
-	fd_set allsocks;
 	int maxfd;
 } recvstream_t;
 
@@ -126,6 +124,7 @@ typedef struct ndag_format_data {
 
         pthread_t controlthread;
         libtrace_message_queue_t controlqueue;
+        int consterfframing;
 } ndag_format_data_t;
 
 enum {
@@ -187,7 +186,7 @@ static int join_multicast_group(char *groupaddr, char *localiface,
         unsigned int interface;
         char pstr[16];
         struct group_req greq;
-        int bufsize;
+        int bufsize, val;
 
         int sock;
 
@@ -226,6 +225,14 @@ static int join_multicast_group(char *groupaddr, char *localiface,
         if (sock < 0) {
                 fprintf(stderr,
                         "Failed to create multicast socket for %s:%s -- %s\n",
+                                groupaddr, portstr, strerror(errno));
+                goto sockcreateover;
+        }
+
+        val = 1;
+        if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) < 0) {
+                fprintf(stderr,
+                        "Failed to set REUSEADDR socket option for %s:%s -- %s\n",
                                 groupaddr, portstr, strerror(errno));
                 goto sockcreateover;
         }
@@ -278,11 +285,18 @@ static int ndag_init_input(libtrace_t *libtrace) {
         libtrace->format_data = (ndag_format_data_t *)malloc(
                         sizeof(ndag_format_data_t));
 
+	if (!libtrace->format_data) {
+		trace_set_err(libtrace, TRACE_ERR_INIT_FAILED, "Unable to allocate memory for "
+			"format data inside ndag_init_input()");
+		return -1;
+	}
+
         FORMAT_DATA->multicastgroup = NULL;
         FORMAT_DATA->portstr = NULL;
         FORMAT_DATA->localiface = NULL;
         FORMAT_DATA->nextthreadid = 0;
         FORMAT_DATA->receivers = NULL;
+        FORMAT_DATA->consterfframing = -1;
 
         scan = strchr(libtrace->uridata, ',');
         if (scan == NULL) {
@@ -303,6 +317,28 @@ static int ndag_init_input(libtrace_t *libtrace) {
 
                 FORMAT_DATA->portstr = strdup(scan + 1);
         }
+        return 0;
+}
+
+static int ndag_config_input(libtrace_t *libtrace, trace_option_t option,
+                void *value) {
+
+        switch(option) {
+                case TRACE_OPTION_CONSTANT_ERF_FRAMING:
+                        FORMAT_DATA->consterfframing = *(int *)value;
+                        break;
+                case TRACE_OPTION_EVENT_REALTIME:
+                case TRACE_OPTION_SNAPLEN:
+                case TRACE_OPTION_PROMISC:
+                case TRACE_OPTION_FILTER:
+                case TRACE_OPTION_META_FREQ:
+                default:
+                        trace_set_err(libtrace, TRACE_ERR_OPTION_UNAVAIL,
+                                        "Unsupported option %d",
+                                        option);
+                        return -1;
+        }
+
         return 0;
 }
 
@@ -487,7 +523,6 @@ static int ndag_start_threads(libtrace_t *libtrace, uint32_t maxthreads)
                 FORMAT_DATA->receivers[i].dropped_upstream = 0;
                 FORMAT_DATA->receivers[i].received_packets = 0;
                 FORMAT_DATA->receivers[i].missing_records = 0;
-		FD_ZERO(&(FORMAT_DATA->receivers[i].allsocks));
 		FORMAT_DATA->receivers[i].maxfd = -1;
 
                 libtrace_message_queue_init(&(FORMAT_DATA->receivers[i].mqueue),
@@ -533,7 +568,7 @@ static void halt_ndag_receiver(recvstream_t *receiver) {
                         free(src.saved);
                 }
 
-#if HAVE_RECVMMSG
+#if HAVE_DECL_RECVMMSG
                 for (j = 0; j < RECV_BATCH_SIZE; j++) {
                         if (src.mmsgbufs[j].msg_hdr.msg_iov) {
                                 free(src.mmsgbufs[j].msg_hdr.msg_iov);
@@ -543,7 +578,9 @@ static void halt_ndag_receiver(recvstream_t *receiver) {
 		free(src.singlemsg.msg_iov);
 #endif
 
-                close(src.sock);
+                if (src.sock != -1) {
+                        close(src.sock);
+                }
         }
         if (receiver->knownmonitors) {
                 free(receiver->knownmonitors);
@@ -583,10 +620,25 @@ static int ndag_fin_input(libtrace_t *libtrace) {
         return 0;
 }
 
-static int ndag_prepare_packet_stream(libtrace_t *libtrace,
-                recvstream_t *rt,
-                streamsock_t *ssock, libtrace_packet_t *packet,
-                uint32_t flags) {
+static int ndag_get_framing_length(const libtrace_packet_t *packet) {
+
+        libtrace_t *libtrace = packet->trace;
+
+        if (FORMAT_DATA->consterfframing >= 0) {
+                return FORMAT_DATA->consterfframing;
+        }
+        return erf_get_framing_length(packet);
+}
+
+static int ndag_prepare_packet_stream(libtrace_t *restrict libtrace,
+                recvstream_t *restrict rt,
+                streamsock_t *restrict ssock,
+                libtrace_packet_t *restrict packet,
+                uint32_t flags UNUSED) {
+
+        /* XXX flags is constant, so we can tell the compiler to not
+         * bother copying over the parameter
+         */
 
         dag_record_t *erfptr;
         ndag_encap_t *encaphdr;
@@ -594,11 +646,14 @@ static int ndag_prepare_packet_stream(libtrace_t *libtrace,
         int nr;
 	uint16_t rlen;
 
+        /*
         if ((flags & TRACE_PREP_OWN_BUFFER) == TRACE_PREP_OWN_BUFFER) {
                 packet->buf_control = TRACE_CTRL_PACKET;
         } else {
                 packet->buf_control = TRACE_CTRL_EXTERNAL;
         }
+        */
+        packet->buf_control = TRACE_CTRL_EXTERNAL;
 
         packet->trace = libtrace;
         packet->buffer = ssock->nextread;
@@ -609,10 +664,19 @@ static int ndag_prepare_packet_stream(libtrace_t *libtrace,
 
         if (erfptr->flags.rxerror == 1) {
                 packet->payload = NULL;
-                erfptr->rlen = htons(erf_get_framing_length(packet));
+                if (FORMAT_DATA->consterfframing >= 0) {
+                        erfptr->rlen = htons(FORMAT_DATA->consterfframing & 0xffff);
+                } else {
+                        erfptr->rlen = htons(erf_get_framing_length(packet));
+                }
         } else {
-                packet->payload = (char *)packet->buffer +
+                if (FORMAT_DATA->consterfframing >= 0) {
+                        packet->payload = (char *)packet->buffer +
+                                FORMAT_DATA->consterfframing;
+                } else {
+                        packet->payload = (char *)packet->buffer +
                                 erf_get_framing_length(packet);
+                }
         }
 
         /* Update upstream drops using lctr */
@@ -644,7 +708,11 @@ static int ndag_prepare_packet_stream(libtrace_t *libtrace,
         ssock->nextread += rlen;
 	ssock->nextts = 0;
 
-	assert(ssock->nextread - ssock->saved[nr] <= ssock->savedsize[nr]);
+	if (ssock->nextread - ssock->saved[nr] > ssock->savedsize[nr]) {
+		trace_set_err(libtrace, TRACE_ERR_INIT_FAILED, "Walked past the end of the "
+			"nDAG receive buffer, probably due to a invalid rlen, in ndag_prepare_packet_stream()");
+		return -1;
+	}
 
         if (ssock->nextread - ssock->saved[nr] >= ssock->savedsize[nr]) {
                 /* Read everything from this buffer, mark as empty and
@@ -671,7 +739,7 @@ static int ndag_prepare_packet(libtrace_t *libtrace UNUSED,
                 void *buffer UNUSED, libtrace_rt_types_t rt_type UNUSED,
                 uint32_t flags UNUSED) {
 
-        assert(0 && "Sending nDAG records over RT doesn't make sense! Please stop.");
+	fprintf(stderr, "Sending nDAG records over RT doesn't make sense! Please stop\n");
         return 0;
 
 }
@@ -717,13 +785,6 @@ static int add_new_streamsock(recvstream_t *rt, streamsource_t src) {
 
         ssock = &(rt->sources[rt->sourcecount]);
 
-        ssock->sock = join_multicast_group(src.groupaddr, src.localiface,
-                        NULL, src.port, &(ssock->srcaddr));
-
-        if (ssock->sock < 0) {
-                return -1;
-        }
-
         for (i = 0; i < rt->monitorcount; i++) {
                 if (rt->knownmonitors[i].monitorid == src.monitor) {
                         mon = &(rt->knownmonitors[i]);
@@ -750,7 +811,18 @@ static int add_new_streamsock(recvstream_t *rt, streamsource_t src) {
                 ssock->savedsize[i] = 0;
         }
 
-#if HAVE_RECVMMSG
+        ssock->sock = join_multicast_group(src.groupaddr, src.localiface,
+                        NULL, src.port, &(ssock->srcaddr));
+
+        if (ssock->sock < 0) {
+                return -1;
+        }
+
+	if (ssock->sock > rt->maxfd) {
+		rt->maxfd = ssock->sock;
+	}
+
+#if HAVE_DECL_RECVMMSG
         for (i = 0; i < RECV_BATCH_SIZE; i++) {
                 ssock->mmsgbufs[i].msg_hdr.msg_iov = (struct iovec *)
                                 malloc(sizeof(struct iovec));
@@ -762,7 +834,7 @@ static int add_new_streamsock(recvstream_t *rt, streamsource_t src) {
                 ssock->mmsgbufs[i].msg_len = 0;
         }
 #else
-	ssock->singlemsg.msg_iov = (struct iovec *) malloc(sizeof(struct iovec));
+	ssock->singlemsg.msg_iov = (struct iovec *) calloc(1, sizeof(struct iovec));
 #endif
 
         ssock->nextread = NULL;;
@@ -770,10 +842,6 @@ static int add_new_streamsock(recvstream_t *rt, streamsource_t src) {
         ssock->nextwriteind = 0;
         ssock->recordcount = 0;
         rt->sourcecount += 1;
-	FD_SET(ssock->sock, &(rt->allsocks));
-	if (ssock->sock > rt->maxfd) {
-		rt->maxfd = ssock->sock;
-	}
 
         fprintf(stderr, "Added new stream %s:%u to thread %d\n",
                         ssock->groupaddr, ssock->port, rt->threadindex);
@@ -836,7 +904,7 @@ static int init_receivers(streamsock_t *ssock, int required) {
         int wind = ssock->nextwriteind;
         int i = 1;
 
-#if HAVE_RECVMMSG
+#if HAVE_DECL_RECVMMSG
         for (i = 0; i < required; i++) {
                 if (i >= RECV_BATCH_SIZE) {
                         break;
@@ -854,7 +922,10 @@ static int init_receivers(streamsock_t *ssock, int required) {
                 wind ++;
         }
 #else
-	assert(required > 0);
+	if (required <= 0) {
+		fprintf(stderr, "You are required to have atleast 1 receiver in init_receivers\n");
+		return TRACE_ERR_INIT_FAILED;
+	}
 	ssock->singlemsg.msg_iov->iov_base = ssock->saved[wind];
 	ssock->singlemsg.msg_iov->iov_len = ENCAP_BUFSIZE;
 	ssock->singlemsg.msg_iovlen = 1;
@@ -880,7 +951,6 @@ static int check_ndag_received(streamsock_t *ssock, int index,
         } else if (rectype != NDAG_PKT_ENCAPERF) {
                 fprintf(stderr, "Received invalid record on the channel for %s:%u.\n",
                                 ssock->groupaddr, ssock->port);
-		FD_CLR(ssock->sock, &(rt->allsocks));
                 close(ssock->sock);
                 ssock->sock = -1;
                 return -1;
@@ -890,7 +960,10 @@ static int check_ndag_received(streamsock_t *ssock, int index,
         ssock->nextwriteind ++;
         ssock->bufavail --;
 
-        assert(ssock->bufavail >= 0);
+	if (ssock->bufavail < 0) {
+		fprintf(stderr, "No space in buffer in check_ndag_received()\n");
+		return -1;
+	}
 	if (ssock->nextwriteind >= ENCAP_BUFFERS) {
                 ssock->nextwriteind = 0;
         }
@@ -940,31 +1013,20 @@ static int receive_from_single_socket(streamsock_t *ssock, struct timeval *tv,
         int ret, ndagstat, avail;
         int toret = 0;
 
-#if HAVE_RECVMMSG
+#if HAVE_DECL_RECVMMSG
 	int i;
-#endif
-
-        if (ssock->sock == -1) {
-                return 0;
-        }
-
-#if HAVE_RECVMMSG
-        /* Plenty of full buffers, just use the packets in those */
-        if (ssock->bufavail < RECV_BATCH_SIZE / 2) {
-                return 1;
-        }
-#else
-	if (ssock->bufavail == 0) {
-		return 1;
-	}
 #endif
 
         avail = init_receivers(ssock, ssock->bufavail);
 
-#if HAVE_RECVMMSG
+#if HAVE_DECL_RECVMMSG
         ret = recvmmsg(ssock->sock, ssock->mmsgbufs, avail,
                         MSG_DONTWAIT, NULL);
 #else
+        if (avail != 1) {
+                return 0;
+        }
+
 	ret = recvmsg(ssock->sock, &(ssock->singlemsg), MSG_DONTWAIT);
 #endif
         if (ret < 0) {
@@ -986,7 +1048,6 @@ static int receive_from_single_socket(streamsock_t *ssock, struct timeval *tv,
                                         ssock->groupaddr,
                                         ssock->port);
 
-				FD_CLR(ssock->sock, &(rt->allsocks));
                                 close(ssock->sock);
                                 ssock->sock = -1;
                         }
@@ -996,7 +1057,6 @@ static int receive_from_single_socket(streamsock_t *ssock, struct timeval *tv,
                                 "Error receiving encapsulated records from %s:%u -- %s \n",
                                 ssock->groupaddr, ssock->port,
                                 strerror(errno));
-			FD_CLR(ssock->sock, &(rt->allsocks));
                         close(ssock->sock);
                         ssock->sock = -1;
                 }
@@ -1005,7 +1065,7 @@ static int receive_from_single_socket(streamsock_t *ssock, struct timeval *tv,
 
         ssock->startidle = 0;
 
-#if HAVE_RECVMMSG
+#if HAVE_DECL_RECVMMSG
         for (i = 0; i < ret; i++) {
                 ndagstat = check_ndag_received(ssock, ssock->nextwriteind,
                                 ssock->mmsgbufs[i].msg_len, rt);
@@ -1034,27 +1094,59 @@ static int receive_from_sockets(recvstream_t *rt) {
         int i, readybufs, gottime;
         struct timeval tv;
 	fd_set fds;
+        int maxfd = 0;
 	struct timeval zerotv;
 
         readybufs = 0;
         gottime = 0;
 
-	fds = rt->allsocks;
-
 	if (rt->maxfd == -1) {
 		return 0;
 	}
 
-	zerotv.tv_sec = 0;
-	zerotv.tv_usec = 0;
+	for (i = 0; i < rt->sourcecount; i++) {
+                if (rt->sources[i].sock == -1) {
+                        continue;
+                }
 
-	if (select(rt->maxfd + 1, &fds, NULL, NULL, &zerotv) == -1) {
+#if HAVE_DECL_RECVMMSG
+                /* Plenty of full buffers, just use the packets in those */
+                if (rt->sources[i].bufavail < RECV_BATCH_SIZE / 2) {
+                        readybufs ++;
+                        continue;
+                }
+#else
+                if (rt->sources[i].bufavail == 0) {
+                        readybufs ++;
+                        continue;
+                }
+#endif
+                if (maxfd == 0) {
+                        FD_ZERO(&fds);
+                }
+                FD_SET(rt->sources[i].sock, &fds);
+                if (maxfd < rt->sources[i].sock) {
+                        maxfd = rt->sources[i].sock;
+                }
+        }
+
+
+        if (maxfd <= 0) {
+                return readybufs;
+        }
+
+        zerotv.tv_sec = 0;
+        zerotv.tv_usec = 0;
+	if (select(maxfd + 1, &fds, NULL, NULL, &zerotv) == -1) {
 		/* log the error? XXX */
 		return -1;
 	}
 
 	for (i = 0; i < rt->sourcecount; i++) {
 		if (!FD_ISSET(rt->sources[i].sock, &fds)) {
+			if (rt->sources[i].bufavail < ENCAP_BUFFERS) {
+				readybufs ++;
+			}
 			continue;
 		}
                 readybufs += receive_from_single_socket(&(rt->sources[i]),
@@ -1216,23 +1308,18 @@ static int ndag_pread_packets(libtrace_t *libtrace, libtrace_thread_t *t,
 
         rt = (recvstream_t *)t->format_data;
 
-
         do {
                 /* Only check for messages once per batch */
                 if (read_packets == 0) {
                         rem = receive_encap_records_block(libtrace, rt,
                                 packets[read_packets]);
-                } else {
-                        rem = receive_encap_records_nonblock(libtrace, rt,
-                                packets[read_packets]);
-                }
+                        if (rem < 0) {
+                                return rem;
+                        }
 
-                if (rem < 0) {
-                        return rem;
-                }
-
-                if (rem == 0) {
-                        break;
+                        if (rem == 0) {
+                                break;
+                        }
                 }
 
                 nextavail = select_next_packet(rt);
@@ -1254,7 +1341,10 @@ static int ndag_pread_packets(libtrace_t *libtrace, libtrace_thread_t *t,
                 streamsock_t *src = &(rt->sources[i]);
 		src->bufavail += src->bufwaiting;
 		src->bufwaiting = 0;
-		assert(src->bufavail >= 0 && src->bufavail <= ENCAP_BUFFERS);
+		if (src->bufavail < 0 || src->bufavail > ENCAP_BUFFERS) {
+			trace_set_err(libtrace, TRACE_ERR_BAD_IO, "Not enough buffer space in ndag_pread_packets()");
+			return -1;
+		}
 	}
 
         return read_packets;
@@ -1343,7 +1433,10 @@ static libtrace_eventobj_t trace_event_ndag(libtrace_t *libtrace,
                 streamsock_t *src = &(FORMAT_DATA->receivers[0].sources[i]);
 		src->bufavail += src->bufwaiting;
 		src->bufwaiting = 0;
-		assert(src->bufavail >= 0 && src->bufavail <= ENCAP_BUFFERS);
+		if (src->bufavail < 0 || src->bufavail > ENCAP_BUFFERS) {
+			trace_set_err(libtrace, TRACE_ERR_BAD_IO, "Not enough buffer space in trace_event_ndag()");
+			break;
+		}
 	}
 
         return event;
@@ -1410,7 +1503,7 @@ static struct libtrace_format_t ndag = {
         NULL,                   /* probe filename */
         NULL,                   /* probe magic */
         ndag_init_input,        /* init_input */
-        NULL,                   /* config_input */
+        ndag_config_input,      /* config_input */
         ndag_start_input,       /* start_input */
         ndag_pause_input,       /* pause_input */
         NULL,                   /* init_output */
@@ -1422,6 +1515,7 @@ static struct libtrace_format_t ndag = {
         ndag_prepare_packet,    /* prepare_packet */
         NULL,                   /* fin_packet */
         NULL,                   /* write_packet */
+        NULL,                   /* flush_output */
         erf_get_link_type,      /* get_link_type */
         erf_get_direction,      /* get_direction */
         erf_set_direction,      /* set_direction */
@@ -1434,7 +1528,7 @@ static struct libtrace_format_t ndag = {
         NULL,                   /* seek_seconds */
         erf_get_capture_length, /* get_capture_length */
         erf_get_wire_length,    /* get_wire_length */
-        erf_get_framing_length, /* get_framing_length */
+        ndag_get_framing_length, /* get_framing_length */
         erf_set_capture_length, /* set_capture_length */
         NULL,                   /* get_received_packets */
         NULL,                   /* get_filtered_packets */

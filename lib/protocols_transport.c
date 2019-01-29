@@ -28,7 +28,6 @@
 #include "libtrace.h"
 #include "protocols.h"
 #include "checksum.h"
-#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h> // fprintf
 #include <string.h>
@@ -61,14 +60,15 @@ DLLEXPORT size_t trace_get_payload_length(const libtrace_packet_t *packet) {
 	libtrace_ip6_t *ip6;
 	libtrace_tcp_t *tcp;
 	size_t len = 0;
+        uint8_t iplenzero = 0;
 
 	/* Just use the cached length if we can */
-	if (packet->payload_length != -1)
-		return packet->payload_length;	
+	if (packet->cached.payload_length != -1)
+		return packet->cached.payload_length;	
 
 	/* Set to zero so that we can return early without having to 
 	 * worry about forgetting to update the cached value */
-	((libtrace_packet_t *)packet)->payload_length = 0;
+	((libtrace_packet_t *)packet)->cached.payload_length = 0;
 	layer = trace_get_layer3(packet, &ethertype, &rem);
 	if (!layer)
 		return 0;
@@ -77,6 +77,10 @@ DLLEXPORT size_t trace_get_payload_length(const libtrace_packet_t *packet) {
 			ip = (libtrace_ip_t *)layer;
 			if (rem < sizeof(libtrace_ip_t))
 				return 0;
+                        if (ntohs(ip->ip_len) == 0) {
+                                iplenzero = 1;
+                                break;
+                        }
 			len = ntohs(ip->ip_len) - (4 * ip->ip_hl);
 		
 			/* Deal with v6 within v4 */
@@ -89,10 +93,32 @@ DLLEXPORT size_t trace_get_payload_length(const libtrace_packet_t *packet) {
 			if (rem < sizeof(libtrace_ip6_t))
 				return 0;
 			len = ntohs(ip6->plen);
+                        if (len == 0) {
+                                iplenzero = 1;
+                        }
 			break;
 		default:
 			return 0;
 	}
+
+        if (iplenzero) {
+                /* deal with cases where IP length is zero due to
+                 * hardware segmentation offload */
+                uint8_t *iplayer, *pktstart;
+                libtrace_linktype_t linktype;
+                uint32_t rem;
+
+                iplayer = (uint8_t *)layer;
+                pktstart = (uint8_t *)trace_get_packet_buffer(packet, &linktype, &rem);
+
+                len = rem - (iplayer - pktstart);
+                if (ethertype == TRACE_ETHERTYPE_IP) {
+			ip = (libtrace_ip_t *)layer;
+                        len -= (4 * ip->ip_hl);
+                } else {
+                        len -= sizeof(libtrace_ip6_t);
+                }
+        }
 
 	layer = trace_get_transport(packet, &proto, &rem);
 	if (!layer)
@@ -135,7 +161,7 @@ DLLEXPORT size_t trace_get_payload_length(const libtrace_packet_t *packet) {
 			return 0;
 	}
 
-	((libtrace_packet_t *)packet)->payload_length = len;
+	((libtrace_packet_t *)packet)->cached.payload_length = len;
 	return len;
 
 }
@@ -154,7 +180,7 @@ DLLEXPORT void *trace_get_transport(const libtrace_packet_t *packet,
 
 	if (!remaining) remaining=&dummy_remaining;
 
-	if (packet->l4_header) {
+	if (packet->cached.l4_header) {
 		/*
 		void *link;
 		libtrace_linktype_t linktype;
@@ -162,10 +188,9 @@ DLLEXPORT void *trace_get_transport(const libtrace_packet_t *packet,
 		if (!link)
 			return NULL;
 		*/
-		*proto = packet->transport_proto;
-		/* *remaining -= (packet->l4_header - link); */
-		*remaining = packet->l4_remaining;
-		return packet->l4_header;
+		*proto = packet->cached.transport_proto;
+		*remaining = packet->cached.l4_remaining;
+		return packet->cached.l4_header;
 	}
 
 	transport = trace_get_layer3(packet,&ethertype,remaining);
@@ -194,9 +219,9 @@ DLLEXPORT void *trace_get_transport(const libtrace_packet_t *packet,
 			
 	}
 
-	((libtrace_packet_t *)packet)->transport_proto = *proto;
-	((libtrace_packet_t *)packet)->l4_header = transport;
-	((libtrace_packet_t *)packet)->l4_remaining = *remaining;
+	((libtrace_packet_t *)packet)->cached.transport_proto = *proto;
+	((libtrace_packet_t *)packet)->cached.l4_header = transport;
+	((libtrace_packet_t *)packet)->cached.l4_remaining = *remaining;
 
 
 	return transport;
@@ -540,8 +565,7 @@ DLLEXPORT uint16_t *trace_checksum_transport(libtrace_packet_t *packet,
 
 	sum += add_checksum(header, (uint16_t)plen);
 	*csum = ntohs(finish_checksum(sum));
-	//assert(0);
-	
+
 	return (uint16_t *)csum_ptr;
 }
 

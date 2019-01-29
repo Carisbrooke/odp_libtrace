@@ -27,7 +27,6 @@
 #include "libtrace.h"
 
 #include "rt_protocol.h"
-#include <assert.h>
 #include "libtrace_int.h"
 #include <stdlib.h>
 #include <string.h>
@@ -108,8 +107,11 @@ libtrace_dlt_t libtrace_to_pcap_dlt(libtrace_linktype_t type)
 		case TRACE_TYPE_AAL5:
 		case TRACE_TYPE_METADATA:
 		case TRACE_TYPE_NONDATA:
+                case TRACE_TYPE_ETSILI:
 			break;
+		case TRACE_TYPE_PCAPNG_META:
 		case TRACE_TYPE_UNKNOWN:
+                case TRACE_TYPE_CONTENT_INVALID:
 			break;
 	}
 	return TRACE_DLT_ERROR;
@@ -159,7 +161,6 @@ libtrace_dlt_t rt_to_pcap_linktype(libtrace_rt_types_t rt_type)
         }
 
 	fprintf(stderr, "Error: RT type %u cannot be converted to a pcap DLT\n", rt_type);
-	assert(false);
 	return 0;	/* satisfy warnings */
 }
 
@@ -210,7 +211,10 @@ uint8_t libtrace_to_erf_type(libtrace_linktype_t linktype)
 		case TRACE_TYPE_METADATA:
 		case TRACE_TYPE_NONDATA:
 		case TRACE_TYPE_OPENBSD_LOOP:
+                case TRACE_TYPE_ETSILI:
+		case TRACE_TYPE_PCAPNG_META:
 		case TRACE_TYPE_UNKNOWN:
+		case TRACE_TYPE_CONTENT_INVALID:
 			break;
 	}
 	return 255;
@@ -330,6 +334,7 @@ bool demote_packet(libtrace_packet_t *packet)
 	char *tmp;
 	struct timeval tv;
 	static libtrace_t *trace = NULL;
+
 	switch(trace_get_link_type(packet)) {
 		case TRACE_TYPE_ATM:
 			remaining=trace_get_capture_length(packet);
@@ -368,6 +373,7 @@ bool demote_packet(libtrace_packet_t *packet)
 				trace = trace_create_dead("pcapfile:-");
 			}
 
+                        trace->startcount = packet->trace->startcount;
 			packet->trace=trace;
 
 			/* Invalidate caches */

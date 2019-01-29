@@ -6,10 +6,11 @@ pkginclude_HEADERS = dagformat.h lt_inttypes.h daglegacy.h \
         data-struct/vector.h \
         data-struct/deque.h data-struct/linked_list.h \
         data-struct/buckets.h data-struct/sliding_window.h \
-	data-struct/message_queue.h hash_toeplitz.h
+	data-struct/message_queue.h hash_toeplitz.h \
+        data-struct/simple_circular_buffer.h
 
-AM_CFLAGS=@LIBCFLAGS@ @CFLAG_VISIBILITY@ -pthread
-AM_CXXFLAGS=@LIBCXXFLAGS@ @CFLAG_VISIBILITY@ -pthread
+AM_CFLAGS=@LIBCFLAGS@ @CFLAG_VISIBILITY@ -pthread -std=gnu99
+AM_CXXFLAGS=@LIBCXXFLAGS@ @CFLAG_VISIBILITY@ -pthread -std=gnu99
 
 extra_DIST = format_template.c
 NATIVEFORMATS=format_linux_common.c format_linux_ring.c format_linux_int.c format_linux_common.h
@@ -33,7 +34,7 @@ BPFJITSOURCE=
 endif
 
 if HAVE_DPDK
-NATIVEFORMATS+= format_dpdk.c format_dpdkndag.c
+NATIVEFORMATS+= format_dpdk.c format_dpdkndag.c format_dpdk.h
 # So we also make libtrace.mk in dpdk otherwise automake tries to expand
 # it too early which I cannot seem to stop unless we use a path that
 # doesn't exist currently
@@ -41,6 +42,8 @@ export RTE_SDK=@RTE_SDK@
 export RTE_TARGET=@RTE_TARGET@
 export SAVED_CFLAGS:=$(CFLAGS)
 export SAVED_CXXFLAGS:=$(CXXFLAGS)
+export SAVED_CPPFLAGS:=$(CPPFLAGS)
+export SAVED_LDFLAGS:=$(LDFLAGS)
 include $(RTE_SDK)/mk/rte.vars.mk
 # We need to add -Wl before the linker otherwise this breaks our build
 # And include any libraries that DPDK might depend upon
@@ -48,6 +51,14 @@ export DPDK_LIBTRACE_MK=dpdk_libtrace.mk
 include $(DPDK_LIBTRACE_MK)
 export CFLAGS += $(SAVED_CFLAGS)
 export CXXFLAGS += $(SAVED_CXXFLAGS)
+export CPPFLAGS:=$(SAVED_CPPFLAGS)
+export LDFLAGS += $(SAVED_LDFLAGS)
+endif
+
+if HAVE_WANDDER
+ETSISOURCES=format_etsilive.c
+else
+ETSISOURCES=
 endif
 
 #ODP support
@@ -65,15 +76,16 @@ libtrace_la_SOURCES = trace.c trace_parallel.c common.h \
 		protocols_transport.c protocols.h protocols_ospf.c \
 		protocols_application.c \
 		$(DAGSOURCE) format_erf.h format_ndag.c format_ndag.h \
-		$(BPFJITSOURCE) \
+		$(BPFJITSOURCE) $(ETSISOURCES) \
 		libtrace_arphrd.h \
 		data-struct/ring_buffer.c data-struct/vector.c \
 		data-struct/message_queue.c data-struct/deque.c \
 		data-struct/sliding_window.c data-struct/object_cache.c \
 		data-struct/linked_list.c hash_toeplitz.c combiner_ordered.c \
-                data-struct/buckets.c \
+                data-struct/buckets.c data-struct/simple_circular_buffer.c \
 		combiner_sorted.c combiner_unordered.c \
-		pthread_spinlock.c pthread_spinlock.h
+		pthread_spinlock.c pthread_spinlock.h \
+		strndup.c
 
 if DAG2_4
 nodist_libtrace_la_SOURCES = dagopts.c dagapi.c

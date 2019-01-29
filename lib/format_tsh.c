@@ -30,7 +30,6 @@
 #include "libtrace_int.h"
 #include "format_helper.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -244,6 +243,7 @@ static struct libtrace_format_t tshformat = {
 	tsh_prepare_packet,		/* prepare_packet */
 	NULL,				/* fin_packet */
 	NULL,				/* write_packet */
+	NULL,				/* flush_output */
 	tsh_get_link_type,		/* get_link_type */
 	tsh_get_direction,		/* get_direction */
 	NULL,				/* set_direction */
@@ -293,6 +293,7 @@ static struct libtrace_format_t frplusformat = {
 	tsh_prepare_packet,		/* prepare_packet */
 	NULL,				/* fin_packet */
 	NULL,				/* write_packet */
+	NULL,				/* flush_output */
 	tsh_get_link_type,		/* get_link_type */
 	tsh_get_direction,		/* get_direction */
 	NULL,				/* set_direction */

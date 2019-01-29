@@ -39,7 +39,6 @@
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
-#include <assert.h>
 
 #ifdef HAVE_INTTYPES_H
 #  include <inttypes.h>
@@ -48,6 +47,8 @@
 #endif
 
 #include "format_linux_common.h"
+
+unsigned int rand_seedp = 0;
 
 #ifdef HAVE_NETPACKET_PACKET_H
 
@@ -68,9 +69,12 @@ static int linuxnative_configure_bpf(libtrace_t *libtrace,
 	int sock;
 	pcap_t *pcap;
 
-	/* Take a copy of the filter object as it was passed in */
-	f = (libtrace_filter_t *) malloc(sizeof(libtrace_filter_t));
-	memcpy(f, filter, sizeof(libtrace_filter_t));
+	/* Take a copy of the filter structure to prevent against
+         * deletion causing the filter to no longer work */
+        f = (libtrace_filter_t *) malloc(sizeof(libtrace_filter_t));
+        memset(f, 0, sizeof(libtrace_filter_t));
+        memcpy(f, filter, sizeof(libtrace_filter_t));
+        f->filterstring = strdup(filter->filterstring);
 
 	/* If we are passed a filter with "flag" set to zero, then we must
 	 * compile the filterstring before continuing. This involves
@@ -84,7 +88,7 @@ static int linuxnative_configure_bpf(libtrace_t *libtrace,
 	if (f->flag == 0) {
 		sock = socket(PF_INET, SOCK_STREAM, 0);
 		memset(&ifr, 0, sizeof(struct ifreq));
-		strncpy(ifr.ifr_name, libtrace->uridata, IF_NAMESIZE);
+		strncpy(ifr.ifr_name, libtrace->uridata, IF_NAMESIZE - 1);
 		if (ioctl(sock, SIOCGIFHWADDR, &ifr) != 0) {
 			perror("Can't get HWADDR for interface");
 			return -1;
@@ -118,7 +122,7 @@ static int linuxnative_configure_bpf(libtrace_t *libtrace,
 	}
 
 	if (FORMAT_DATA->filter != NULL)
-		free(FORMAT_DATA->filter);
+                trace_destroy_filter(FORMAT_DATA->filter);
 
 	FORMAT_DATA->filter = f;
 
@@ -163,6 +167,10 @@ int linuxcommon_config_input(libtrace_t *libtrace,
 		case TRACE_OPTION_EVENT_REALTIME:
 			/* Live captures are always going to be in trace time */
 			break;
+                case TRACE_OPTION_REPLAY_SPEEDUP:
+                        break;
+                case TRACE_OPTION_CONSTANT_ERF_FRAMING:
+                        break;
 		/* Avoid default: so that future options will cause a warning
 		 * here to remind us to implement it, or flag it as
 		 * unimplementable
@@ -180,11 +188,20 @@ int linuxcommon_init_input(libtrace_t *libtrace)
 
 	libtrace->format_data = (struct linux_format_data_t *)
 		malloc(sizeof(struct linux_format_data_t));
-	assert(libtrace->format_data != NULL);
+
+	if (!libtrace->format_data) {
+		trace_set_err(libtrace, TRACE_ERR_INIT_FAILED, "Unable to allocate memory for "
+			"format data inside linuxcommon_init_input()");
+		return -1;
+	}
 
 	FORMAT_DATA->per_stream =
 		libtrace_list_init(sizeof(stream_data));
-	assert(FORMAT_DATA->per_stream != NULL);
+
+	if (!FORMAT_DATA->per_stream) {
+		trace_set_err(libtrace, TRACE_ERR_INIT_FAILED, "Unable to create list for stream data linuxcommon_init_input()");
+		return -1;
+	}
 
 	libtrace_list_push_back(FORMAT_DATA->per_stream, &stream_data);
 
@@ -198,7 +215,7 @@ int linuxcommon_init_input(libtrace_t *libtrace)
 	FORMAT_DATA->fanout_flags = PACKET_FANOUT_LB;
 	/* Some examples use pid for the group however that would limit a single
 	 * application to use only int/ring format, instead using rand */
-	FORMAT_DATA->fanout_group = (uint16_t) rand();
+	FORMAT_DATA->fanout_group = (uint16_t) (rand_r(&rand_seedp) % 65536);
 	return 0;
 }
 
@@ -206,7 +223,12 @@ int linuxcommon_init_output(libtrace_out_t *libtrace)
 {
 	libtrace->format_data = (struct linux_format_data_out_t*)
 		malloc(sizeof(struct linux_format_data_out_t));
-	assert(libtrace->format_data != NULL);
+
+	if (!libtrace->format_data) {
+		trace_set_err_out(libtrace, TRACE_ERR_INIT_FAILED, "Unable to allocate memory for "
+			"format data inside linuxcommon_init_output()");
+		return -1;
+	}
 
 	FORMAT_DATA_OUT->fd = -1;
 	FORMAT_DATA_OUT->tx_ring = NULL;
@@ -227,13 +249,17 @@ void linuxcommon_close_input_stream(libtrace_t *libtrace,
 	if (stream->fd != -1)
 		close(stream->fd);
 	stream->fd = -1;
-	if (stream->rx_ring != MAP_FAILED)
-		munmap(stream->rx_ring,
-		       stream->req.tp_block_size *
-		       stream->req.tp_block_nr);
-	stream->rx_ring = MAP_FAILED;
-	stream->rxring_offset = 0;
 	FORMAT_DATA->dev_stats.if_name[0] = 0;
+
+        /* Don't munmap the rx_ring here -- keep it around as long as
+         * possible to ensure that any packets that the user is still
+         * holding references to remain valid.
+         *
+         * Don't worry, linuxring will munmap the rx_ring as soon as
+         * someone either destroys or restarts the trace. At that point,
+         * any remaining packets from the old ring will be recognisable
+         * as invalid.
+         */
 }
 
 #define REPEAT_16(x) x x x x x x x x x x x x x x x x
@@ -474,7 +500,7 @@ int linuxcommon_fin_input(libtrace_t *libtrace)
 {
 	if (libtrace->format_data) {
 		if (FORMAT_DATA->filter != NULL)
-			free(FORMAT_DATA->filter);
+                	trace_destroy_filter(FORMAT_DATA->filter);
 
 		if (FORMAT_DATA->per_stream)
 			libtrace_list_deinit(FORMAT_DATA->per_stream);

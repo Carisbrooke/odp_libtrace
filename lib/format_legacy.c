@@ -33,7 +33,6 @@
 #include "wandio.h"
 
 #include <sys/stat.h>
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -257,7 +256,8 @@ static int legacy_read_packet(libtrace_t *libtrace, libtrace_packet_t *packet) {
 			packet->type = TRACE_RT_DATA_LEGACY_ETH;
 			break;
 		default:
-			assert(0);
+			trace_set_err(libtrace, TRACE_ERR_BAD_FORMAT, "Invalid trace format type in legacy_read_packet()");
+			return -1;
 	}
 
 	/* This is going to block until we either get an entire record
@@ -391,7 +391,12 @@ static int legacynzix_get_capture_length(const libtrace_packet_t *packet UNUSED)
 
 static int legacypos_get_wire_length(const libtrace_packet_t *packet) {
 	legacy_pos_t *lpos = (legacy_pos_t *)packet->header;
-	assert(ntohl(lpos->wlen)>0);
+
+	if (ntohl(lpos->wlen) <= 0) {
+		trace_set_err(packet->trace, TRACE_ERR_BAD_PACKET, "Packet wire length is invalid (%d) "
+			"in legacypos_get_wire_length()", ntohl(lpos->wlen));
+		return -1;
+	}
 	return ntohl(lpos->wlen);
 }
 
@@ -522,6 +527,7 @@ static struct libtrace_format_t legacyatm = {
 	legacy_prepare_packet,		/* prepare_packet */
 	NULL,				/* fin_packet */
 	NULL,				/* write_packet */
+	NULL,				/* flush_output */
 	legacyatm_get_link_type,	/* get_link_type */
 	NULL,				/* get_direction */
 	NULL,				/* set_direction */
@@ -566,6 +572,7 @@ static struct libtrace_format_t legacyeth = {
 	legacy_prepare_packet,		/* prepare_packet */
 	NULL,				/* fin_packet */
 	NULL,				/* write_packet */
+	NULL,				/* flush_output */
 	legacyeth_get_link_type,	/* get_link_type */
 	NULL,				/* get_direction */
 	NULL,				/* set_direction */
@@ -610,6 +617,7 @@ static struct libtrace_format_t legacypos = {
 	legacy_prepare_packet,		/* prepare_packet */
 	NULL,				/* fin_packet */
 	NULL,				/* write_packet */
+	NULL,				/* flush_output */
 	legacypos_get_link_type,	/* get_link_type */
 	NULL,				/* get_direction */
 	NULL,				/* set_direction */
@@ -654,6 +662,7 @@ static struct libtrace_format_t legacynzix = {
 	legacy_prepare_packet,		/* prepare_packet */
 	NULL,				/* fin_packet */
 	NULL,				/* write_packet */
+	NULL,				/* flush_output */
 	legacynzix_get_link_type,	/* get_link_type */
 	NULL,				/* get_direction */
 	NULL,				/* set_direction */

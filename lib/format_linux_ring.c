@@ -44,7 +44,6 @@
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
-#include <assert.h>
 
 #ifdef HAVE_INTTYPES_H
 #  include <inttypes.h>
@@ -60,6 +59,7 @@
 #define TP_TRACE_START(mac, net, hdrend) \
 	((mac) > (hdrend) && (mac) < (net) ? (mac) : (net))
 
+static pthread_mutex_t pagesize_mutex;
 #ifdef HAVE_NETPACKET_PACKET_H
 /* Get current frame in the ring buffer*/
 #define GET_CURRENT_BUFFER(stream) \
@@ -69,6 +69,26 @@
 
 /* Cached page size, the page size shouldn't be changing */
 static int pagesize = 0;
+
+static bool linuxring_can_write(libtrace_packet_t *packet) {
+	/* Get the linktype */
+        libtrace_linktype_t ltype = trace_get_link_type(packet);
+
+        if (ltype == TRACE_TYPE_CONTENT_INVALID) {
+                return false;
+        }
+        if (ltype == TRACE_TYPE_NONDATA) {
+                return false;
+        }
+        if (ltype == TRACE_TYPE_PCAPNG_META) {
+                return false;
+        }
+        if (ltype == TRACE_TYPE_ERF_META) {
+                return false;
+        }
+
+        return true;
+}
 
 /*
  * Try figure out the best sizes for the ring buffer. Ensure that:
@@ -87,7 +107,11 @@ static void calculate_buffers(struct tpacket_req * req, int fd, char * uri,
 {
 	struct ifreq ifr;
 	unsigned max_frame = LIBTRACE_PACKET_BUFSIZE;
-	pagesize = getpagesize();
+        pthread_mutex_lock(&pagesize_mutex);
+        if (pagesize == 0) {
+        	pagesize = getpagesize();
+        }
+        pthread_mutex_unlock(&pagesize_mutex);
 
 	strcpy(ifr.ifr_name, uri);
 	/* Don't bother trying to set frame size above mtu linux will drop
@@ -142,11 +166,21 @@ static void calculate_buffers(struct tpacket_req * req, int fd, char * uri,
 	*/
 
 	/* In case we have some silly values*/
-	assert(req->tp_block_size);
-	assert(req->tp_block_nr);
-	assert(req->tp_frame_size);
-	assert(req->tp_frame_nr);
-	assert(req->tp_block_size % req->tp_frame_size == 0);
+	if (!req->tp_block_size) {
+		fprintf(stderr, "Unexpected value of zero for req->tp_block_size in calculate_buffers()\n");
+	}
+	if (!req->tp_block_nr) {
+		fprintf(stderr, "Unexpected value of zero for req->tp_block_nr in calculate_buffers()\n");
+	}
+	if (!req->tp_frame_size) {
+		fprintf(stderr, "Unexpected value of zero for req->tp_frame_size in calculate_buffers()\n");
+	}
+	if (!req->tp_frame_nr) {
+		fprintf(stderr, "Unexpected value of zero for req->tp_frame_nr in calculate_buffers()\n");
+	}
+	if (req->tp_block_size % req->tp_frame_size != 0) {
+		fprintf(stderr, "Unexpected value of zero for req->tp_block_size %% req->tp_frame_size in calculate_buffers()\n");
+	}
 }
 
 static inline int socket_to_packetmmap(char * uridata, int ring_type,
@@ -245,6 +279,15 @@ static inline int linuxring_start_input_stream(libtrace_t *libtrace,
                                                struct linux_per_stream_t *stream) {
 	char error[2048];
 
+        /* Unmap any previous ring buffers associated with this stream. */
+        if (stream->rx_ring != MAP_FAILED) {
+                munmap(stream->rx_ring, stream->req.tp_block_size *
+                                stream->req.tp_block_nr);
+                stream->rx_ring = MAP_FAILED;
+                stream->rxring_offset = 0;
+        }
+
+
 	/* We set the socket up the same and then convert it to PACKET_MMAP */
 	if (linuxcommon_start_input_stream(libtrace, stream) < 0)
 		return -1;
@@ -267,6 +310,34 @@ static inline int linuxring_start_input_stream(libtrace_t *libtrace,
 
 	return 0;
 }
+
+static int linuxring_fin_input(libtrace_t *libtrace) {
+	size_t i;
+
+	if (libtrace->format_data) {
+		for (i = 0; i < libtrace_list_get_size(FORMAT_DATA->per_stream); ++i) {
+			struct linux_per_stream_t *stream;
+	                stream = libtrace_list_get_index(
+				FORMAT_DATA->per_stream, i)->data;
+			if (stream->rx_ring != MAP_FAILED) {
+				munmap(stream->rx_ring,
+						stream->req.tp_block_size *
+						stream->req.tp_block_nr);
+			}
+		}
+
+		if (FORMAT_DATA->filter != NULL)
+                	trace_destroy_filter(FORMAT_DATA->filter);
+
+                if (FORMAT_DATA->per_stream)
+                        libtrace_list_deinit(FORMAT_DATA->per_stream);
+
+                free(libtrace->format_data);
+        }
+
+        return 0;
+}
+
 
 static int linuxring_start_input(libtrace_t *libtrace)
 {
@@ -404,14 +475,18 @@ static int linuxring_get_framing_length(const libtrace_packet_t *packet)
 static size_t linuxring_set_capture_length(libtrace_packet_t *packet,
 					   size_t size)
 {
-	assert(packet);
+	if (!packet) {
+		fprintf(stderr, "NULL packet passed into linuxring_set_capture_length()\n");
+		/* Return -1 on error? */
+		return ~0U;
+	}
 	if (size > trace_get_capture_length(packet)) {
 		/* We should avoid making a packet larger */
 		return trace_get_capture_length(packet);
 	}
 
 	/* Reset the cached capture length */
-	packet->capture_length = -1;
+	packet->cached.capture_length = -1;
 
 	TO_TP_HDR2(packet->buffer)->tp_snaplen = size;
 
@@ -453,30 +528,37 @@ static int linuxring_prepare_packet(libtrace_t *libtrace UNUSED,
 inline static int linuxring_read_stream(libtrace_t *libtrace,
                                         libtrace_packet_t *packet,
                                         struct linux_per_stream_t *stream,
-                                        libtrace_message_queue_t *queue) {
+                                        libtrace_message_queue_t *queue,
+                                        uint8_t block) {
 
 	struct tpacket2_hdr *header;
 	int ret;
 	unsigned int snaplen;
 	struct pollfd pollset[2];
 
-	ring_release_frame(libtrace, packet);
-	
 	packet->buf_control = TRACE_CTRL_EXTERNAL;
 	packet->type = TRACE_RT_DATA_LINUX_RING;
-	
+
 	/* Fetch the current frame */
 	header = GET_CURRENT_BUFFER(stream);
-	assert((((unsigned long) header) & (pagesize - 1)) == 0);
+	if ((((unsigned long) header) & (pagesize - 1)) != 0) {
+		trace_set_err(libtrace, TRACE_ERR_BAD_IO, "Linux ring packet is not correctly "
+			"aligned to page size in linux_read_string()");
+		return -1;
+	}
 
 	/* TP_STATUS_USER means that we can use the frame.
 	 * When a slot does not have this flag set, the frame is not
 	 * ready for consumption.
 	 */
 	while (!(header->tp_status & TP_STATUS_USER) ||
-	       header->tp_status == TP_STATUS_LIBTRACE) {
-		if ((ret=is_halted(libtrace)) != -1)
-			return ret;
+	                header->tp_status == TP_STATUS_LIBTRACE) {
+                if ((ret=is_halted(libtrace)) != -1)
+                        return ret;
+                if (!block) {
+                        return 0;
+                }
+
 		pollset[0].fd = stream->fd;
 		pollset[0].events = POLLIN;
 		pollset[0].revents = 0;
@@ -546,7 +628,6 @@ inline static int linuxring_read_stream(libtrace_t *libtrace,
 	}
 
 	stream->last_timestamp = packet->order;
-		
 
 	/* We just need to get prepare_packet to set all our packet pointers
 	 * appropriately */
@@ -559,21 +640,34 @@ inline static int linuxring_read_stream(libtrace_t *libtrace,
 }
 
 static int linuxring_read_packet(libtrace_t *libtrace, libtrace_packet_t *packet) {
-	return linuxring_read_stream(libtrace, packet, FORMAT_DATA_FIRST, NULL);
+	return linuxring_read_stream(libtrace, packet, FORMAT_DATA_FIRST, NULL, 1);
 }
 
 #ifdef HAVE_PACKET_FANOUT
 static int linuxring_pread_packets(libtrace_t *libtrace,
                                    libtrace_thread_t *t,
                                    libtrace_packet_t *packets[],
-                                   UNUSED size_t nb_packets) {
-	/* For now just read one packet */
-	packets[0]->error = linuxring_read_stream(libtrace, packets[0],
-	                                          t->format_data, &t->messages);
-	if (packets[0]->error >= 1)
-		return 1;
-	else
-		return packets[0]->error;
+                                   size_t nb_packets) {
+        size_t i;
+        int ret;
+
+        for (i = 0; i < nb_packets; i++) {
+	        ret = linuxring_read_stream(libtrace, packets[i],
+	                        t->format_data, &t->messages, i == 0 ? 1 : 0);
+                packets[i]->error = ret;
+                if (ret < 0) {
+                        return ret;
+                }
+
+                if (ret == 0) {
+                        if (is_halted(libtrace) == READ_EOF) {
+                                return READ_EOF;
+                        }
+                        return i;
+                }
+        }
+
+        return nb_packets;
 }
 #endif
 
@@ -614,14 +708,14 @@ static void linuxring_fin_packet(libtrace_packet_t *packet)
 
 	if (packet->buffer == NULL)
 		return;
-	assert(packet->trace);
+	if (!packet->trace) {
+		fprintf(stderr, "Linux ring packet is not attached to a valid "
+			"trace, Unable to release it, in linuxring_fin_packet()\n");
+		return;
+	}
 
 	/* If we own the packet (i.e. it's not a copy), we need to free it */
 	if (packet->buf_control == TRACE_CTRL_EXTERNAL) {
-		/* Started should always match the existence of the rx_ring
-		 * in the parallel case still just check the first ring */
-		assert(!!FORMAT_DATA_FIRST->rx_ring ==
-		       !!packet->trace->started);
 		/* If we don't have a ring its already been destroyed */
 		if (FORMAT_DATA_FIRST->rx_ring != MAP_FAILED)
 			ring_release_frame(packet->trace, packet);
@@ -633,15 +727,17 @@ static void linuxring_fin_packet(libtrace_packet_t *packet)
 static int linuxring_write_packet(libtrace_out_t *libtrace,
 				  libtrace_packet_t *packet)
 {
+	/* Check linuxring can write this type of packet */
+	if (!linuxring_can_write(packet)) {
+		return 0;
+	}
+
 	struct tpacket2_hdr *header;
 	struct pollfd pollset;
 	struct socket_addr;
 	int ret;
 	unsigned max_size;
 	void * off;
-
-	if (trace_get_link_type(packet) == TRACE_TYPE_NONDATA)
-		return 0;
 
 	max_size = FORMAT_DATA_OUT->req.tp_frame_size -
 		TPACKET2_HDRLEN + sizeof(struct sockaddr_ll);
@@ -738,12 +834,13 @@ static struct libtrace_format_t linuxring = {
 	linuxcommon_init_output,	/* init_output */
 	NULL,				/* config_output */
 	linuxring_start_output,		/* start_ouput */
-	linuxcommon_fin_input,		/* fin_input */
+	linuxring_fin_input,		/* fin_input */
 	linuxring_fin_output,		/* fin_output */
 	linuxring_read_packet,		/* read_packet */
 	linuxring_prepare_packet,	/* prepare_packet */
 	linuxring_fin_packet,		/* fin_packet */
 	linuxring_write_packet,		/* write_packet */
+	NULL,				/* flush_output */
 	linuxring_get_link_type,	/* get_link_type */
 	linuxring_get_direction,	/* get_direction */
 	linuxring_set_direction,	/* set_direction */
@@ -806,6 +903,7 @@ static struct libtrace_format_t linuxring = {
 	linuxring_prepare_packet,	/* prepare_packet */
 	NULL,				/* fin_packet */
 	NULL,				/* write_packet */
+	NULL,				/* flush_output */
 	linuxring_get_link_type,	/* get_link_type */
 	linuxring_get_direction,	/* get_direction */
 	linuxring_set_direction,	/* set_direction */
@@ -836,5 +934,6 @@ static struct libtrace_format_t linuxring = {
  * formate if the user only specifies an interface */
 void linuxring_constructor(void)
 {
+        pthread_mutex_init(&pagesize_mutex, NULL);
 	register_format(&linuxring);
 }

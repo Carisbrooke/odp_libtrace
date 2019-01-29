@@ -33,7 +33,6 @@
 #include "wandio.h"
 
 #include <sys/stat.h>
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -201,6 +200,7 @@ static struct libtrace_format_t atmhdr = {
         atmhdr_prepare_packet,		/* prepare_packet */
 	NULL,                           /* fin_packet */
         NULL,                           /* write_packet */
+        NULL,                           /* flush_output */
         atmhdr_get_link_type,        	/* get_link_type */
         NULL,                           /* get_direction */
         NULL,                           /* set_direction */
