@@ -1,8 +1,11 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 *.o
 *.lo
 *.la
 =======
+=======
+>>>>>>> remotes/origin/bleedingedge
 *.la
 *.o
 *.lo
@@ -104,6 +107,9 @@ tools/tracesplit/tracesplit_dir
 tools/tracestats/tracestats
 tools/tracetop/tracetop
 ylwrap
+<<<<<<< HEAD
 
 .vscode*
 >>>>>>> upstream/master
+=======
+>>>>>>> remotes/origin/bleedingedge

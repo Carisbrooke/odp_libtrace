@@ -37,6 +37,19 @@
 #include <signal.h>
 #include <time.h>
 
+<<<<<<< HEAD
+=======
+//----- OPTIONS -----
+#define SIGNALS_SLOWHALT
+//#define DEBUG
+
+#ifdef DEBUG
+ #define debug(x...) printf(x)
+#else
+ #define debug(x...)
+#endif
+
+>>>>>>> remotes/origin/bleedingedge
 /* Global variables */
 struct libtrace_out_t *output = NULL;
 uint64_t count=UINT64_MAX;
@@ -189,7 +202,19 @@ static libtrace_packet_t *perform_jump(libtrace_packet_t *packet, int jump)
  *  0 = stop reading packets, cos we're done
  *  -1 = stop reading packets, we've got an error
  */
+<<<<<<< HEAD
 static int per_packet(libtrace_packet_t **packet) {
+=======
+
+static int per_packet(libtrace_packet_t **packet) {
+
+#ifdef DEBUG
+	double seconds;
+#endif
+
+	debug("TRACESPLIT: per_packet() called. \n");
+
+>>>>>>> remotes/origin/bleedingedge
         if (IS_LIBTRACE_META_PACKET((*packet))) {
                 return 1;
         }
@@ -203,7 +228,18 @@ static int per_packet(libtrace_packet_t **packet) {
 		trace_set_capture_length(*packet,snaplen);
 	}
 
+<<<<<<< HEAD
 	if (trace_get_seconds(*packet)<starttime) {
+=======
+#ifdef DEBUG
+	seconds = trace_get_seconds(*packet);
+#endif
+	debug("TRACESPLIT: seconds: %f , starttime: %lu \n", seconds, starttime);
+	if (trace_get_seconds(*packet) < starttime) 
+	{
+		debug("TRACESPLIT: seconds < starttime. return and continue read packets\n");
+
+>>>>>>> remotes/origin/bleedingedge
 		return 1;
 	}
 
@@ -213,6 +249,7 @@ static int per_packet(libtrace_packet_t **packet) {
 
 	if (firsttime==0) {
 		time_t now = trace_get_seconds(*packet);
+
 		if (now != 0 && starttime != 0) {
 			firsttime=now-((now - starttime)%interval);
 		}
@@ -221,6 +258,10 @@ static int per_packet(libtrace_packet_t **packet) {
 		}
 	}
 
+<<<<<<< HEAD
+=======
+	//here we close the file
+>>>>>>> remotes/origin/bleedingedge
 	if (output && trace_get_seconds(*packet)>firsttime+interval) {
 		trace_destroy_output(output);
 		output=NULL;
@@ -447,7 +488,7 @@ int main(int argc, char *argv[])
 	/* I decided to be fairly generous in what I accept for the
 	 * compression type string */
 	else if (strncmp(compress_type_str, "gz", 2) == 0 ||
-			strncmp(compress_type_str, "zlib", 4) == 0) {
+		 strncmp(compress_type_str, "zlib", 4) == 0) {
 		compress_type = TRACE_OPTION_COMPRESSTYPE_ZLIB;
 	} else if (strncmp(compress_type_str, "bz", 2) == 0) {
 		compress_type = TRACE_OPTION_COMPRESSTYPE_BZ2;
@@ -457,7 +498,30 @@ int main(int argc, char *argv[])
 		compress_type = TRACE_OPTION_COMPRESSTYPE_LZMA;
 	} else if (strncmp(compress_type_str, "no", 2) == 0) {
 		compress_type = TRACE_OPTION_COMPRESSTYPE_NONE;
-	} else {
+	} else if (strncmp(compress_type_str, "hwgz", 4) == 0) {
+		compress_type = TRACE_OPTION_COMPRESSTYPE_HWZLIB;
+	} else if (strncmp(compress_type_str, "blosc:", 6) == 0) 
+		{
+			if (!strncmp(compress_type_str+6, "blosclz", 7))
+				compress_type = TRACE_OPTION_COMPRESSTYPE_BLOSC_BLOSCLZ;
+			else if (!strncmp(compress_type_str+6, "lz4hc", 5))
+				compress_type = TRACE_OPTION_COMPRESSTYPE_BLOSC_LZ4HC;
+			else if (!strncmp(compress_type_str+6, "lz4", 3))
+				compress_type = TRACE_OPTION_COMPRESSTYPE_BLOSC_LZ4;
+			else if (!strncmp(compress_type_str+6, "snappy", 6))
+				compress_type = TRACE_OPTION_COMPRESSTYPE_BLOSC_SNAPPY;
+			else if (!strncmp(compress_type_str+6, "zlib", 4))
+				compress_type = TRACE_OPTION_COMPRESSTYPE_BLOSC_ZLIB;
+			else if (!strncmp(compress_type_str+6, "zstd", 4))
+				compress_type = TRACE_OPTION_COMPRESSTYPE_BLOSC_ZSTD;
+			else {
+				fprintf(stderr, "Unknown blosc compression type: %s\n"
+					"valid types are: blosclz, lz4hc, lz4, snappy, zlib, zstd\n",
+					compress_type_str);
+				return 1;
+			}
+		}
+	else {
 		fprintf(stderr, "Unknown compression type: %s\n",
 			compress_type_str);
 		return 1;
@@ -470,17 +534,22 @@ int main(int argc, char *argv[])
 
 	output_base = argv[argc - 1];
 
+//repu1sion
+
+#ifdef SIGNALS_SLOWHALT
 	sigact.sa_handler = cleanup_signal;
 	sigemptyset(&sigact.sa_mask);
 	sigact.sa_flags = SA_RESTART;
 
 	sigaction(SIGINT, &sigact, NULL);
 	sigaction(SIGTERM, &sigact, NULL);
-
+#endif
 	output=NULL;
 
+#ifdef SIGNALS_SLOWHALT
 	signal(SIGINT,&cleanup_signal);
 	signal(SIGTERM,&cleanup_signal);
+#endif
 
 	for (i = optind; i < argc - 1; i++) {
 

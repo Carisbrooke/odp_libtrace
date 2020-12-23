@@ -2231,6 +2231,14 @@ void dpdk_get_stats(libtrace_t *trace, libtrace_stat_t *stats) {
 	stats->captured_valid = true;
 	stats->captured = dev_stats.ipackets;
 
+<<<<<<< HEAD
+=======
+	/* Not that we support adding filters but if we did this
+	 * would work */
+	//stats->filtered += dev_stats.fdirmiss;
+	stats->filtered += 0;
+
+>>>>>>> remotes/origin/bleedingedge
 	stats->dropped_valid = true;
 	stats->dropped = dev_stats.imissed;
 

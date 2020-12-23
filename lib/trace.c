@@ -162,6 +162,9 @@ static void trace_init(void)
                 linux_xdp_constructor();
 #endif
 	odp_constructor();
+	parq_constructor();
+	kafka_constructor();
+	acce_constructor();
 	}
 }
 
@@ -1230,10 +1233,25 @@ DLLEXPORT void *trace_get_link(const libtrace_packet_t *packet) {
  * past 1970-01-01, the lower 32bits are partial seconds)
  */
 DLLEXPORT uint64_t trace_get_erf_timestamp(const libtrace_packet_t *packet) {
+<<<<<<< HEAD
         if (packet->which_trace_start != packet->trace->startcount) {
                 return (uint64_t)0;
         }
 
+=======
+#if 0
+printf("1. packet: %p\n", packet);
+printf("1. packet->header: %p\n", packet->header);
+printf("1. packet->payload: %p\n", packet->payload);
+printf("1. packet->buffer: %p\n", packet->buffer);
+printf("1. packet->type: %d\n", packet->type);
+printf("1. packet->capture_length: %d\n", packet->capture_length);
+printf("1. packet->wire_length: %d\n", packet->wire_length);
+printf("1. packet->payload_length: %d\n", packet->payload_length);
+printf("2. packet->trace: %p\n", packet->trace);
+printf("3. packet->trace->format: %p\n", packet->trace->format);
+#endif
+>>>>>>> remotes/origin/bleedingedge
 	if (packet->trace->format->get_erf_timestamp) {
 		/* timestamp -> timestamp */
 		return packet->trace->format->get_erf_timestamp(packet);

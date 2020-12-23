@@ -51,6 +51,6 @@ A. Linux, FreeBSD, Mac OS X and OpenBSD. Windows is not supported.
 Using libtrace:
 
 The best source of information on how to use libtrace and the tools that come
-with it is the libtrace wiki: https://github.com/wanduow/libtrace/wiki
 
-
+with it is the libtrace wiki located at 
+http://www.github.com/wanduow/libtrace/wiki

@@ -1320,6 +1320,9 @@ void linux_xdp_constructor(void);
 //ODP support
 /** Constructor for the ODP format module */
 void odp_constructor(void);
+void kafka_constructor(void);
+void parq_constructor(void);
+void acce_constructor(void);
 
 
 /** Extracts the RadioTap flags from a wireless link header
