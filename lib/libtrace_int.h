@@ -1,36 +1,28 @@
 /*
- * This file is part of libtrace
  *
- * Copyright (c) 2007-2015 The University of Waikato, Hamilton, 
- * New Zealand.
- *
- * Authors: Daniel Lawson 
- *          Perry Lorier
- *          Shane Alcock 
- *          
+ * Copyright (c) 2007-2016 The University of Waikato, Hamilton, New Zealand.
  * All rights reserved.
  *
- * This code has been developed by the University of Waikato WAND 
+ * This file is part of libtrace.
+ *
+ * This code has been developed by the University of Waikato WAND
  * research group. For further information please see http://www.wand.net.nz/
  *
  * libtrace is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
  * (at your option) any later version.
  *
  * libtrace is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with libtrace; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
- * $Id$
  *
  */
-
 /** @file
  *
  * @brief Header file containing definitions for structures and functions that
@@ -83,34 +75,44 @@ extern "C" {
 
 
 #include "rt_protocol.h"
-	
-/* Prefer net/bpf.h over pcap-bpf.h for format_bpf.c on MacOS */
-#ifdef HAVE_NET_BPF_H
-#    include <net/bpf.h>
-#    define HAVE_BPF 1
+
+/* If LIBBPF is available use it over alternatives */
+#if HAVE_LIBBPF
+    #include <bpf/libbpf.h>
+     /* prevent pcap from including any bpf stuff */
+    #define PCAP_DONT_INCLUDE_PCAP_BPF_H 1
+    #define HAVE_BPF 1
+    /* libbpf is missing a declaration of bpf program that we reply on */
+    struct bpf_program {
+        u_int bf_len;
+        struct bpf_insn *bf_insns;
+    };
 #else
-#ifdef HAVE_PCAP_BPF_H
-#  include <pcap-bpf.h>
-#  define HAVE_BPF 1
-#endif
+    /* Prefer net/bpf.h over pcap-bpf.h for format_bpf.c on MacOS */
+    #ifdef HAVE_NET_BPF_H
+        #include <net/bpf.h>
+        #define HAVE_BPF 1
+    #else
+        #ifdef HAVE_PCAP_BPF_H
+            #include <pcap-bpf.h>
+            #define HAVE_BPF 1
+        #endif
+    #endif
 #endif
 
 #ifdef HAVE_PCAP_H
 #  include <pcap.h>
-#  ifdef HAVE_PCAP_INT_H
-#    include <pcap-int.h>
-#  endif
-#endif 
+#endif
 
 #ifdef HAVE_ZLIB_H
 #  include <zlib.h>
 #endif
 
-#ifndef HAVE_STRNDUP
+#if !HAVE_DECL_STRNDUP
 char *strndup(const char *s, size_t size);
 #endif
 
-#ifndef HAVE_STRNCASECMP
+#if !HAVE_DECL_STRNCASECMP
 # ifndef HAVE__STRNICMP
 /** A local implementation of strncasecmp (as some systems do not have it) */
 int strncasecmp(const char *str1, const char *str2, size_t n);
@@ -119,7 +121,7 @@ int strncasecmp(const char *str1, const char *str2, size_t n);
 # endif
 #endif
 
-#ifndef HAVE_SNPRINTF
+#if !HAVE_DECL_SNPRINTF
 # ifndef HAVE_SPRINTF_S
 /** A local implementation of snprintf (as some systems do not have it) */
 int snprintf(char *str, size_t size, const char *format, ...);
@@ -159,15 +161,19 @@ int snprintf(char *str, size_t size, const char *format, ...);
 
 //#define RP_BUFSIZE 65536U
 
+#define LIBTRACE_MAX_REPLAY_SPEEDUP 1000
+
 /** Data about the most recent event from a trace file */
 struct libtrace_event_status_t {
 	/** A libtrace packet to store the packet when a PACKET event occurs */
 	libtrace_packet_t *packet;
-	/** Time between the timestamp for the current packet and the current 
-	 * walltime */
-	double tdelta;
-	/** The timestamp of the previous PACKET event */
-	double trace_last_ts;
+
+        /* The walltime when we processed the first packet from the trace */
+        double first_now;
+
+        /* The tracetime of the first packet in the trace */
+        double first_ts;
+
 	/** The size of the current PACKET event */
 	int psize;
 	/** Whether there is a packet stored in *packet above waiting for an
@@ -189,6 +195,11 @@ enum thread_states {
 	THREAD_FINISHED,
 	THREAD_PAUSED,
 	THREAD_STATE_MAX
+};
+
+enum hash_owner {
+        HASH_OWNED_LIBTRACE,
+        HASH_OWNED_EXTERNAL,
 };
 
 /**
@@ -292,6 +303,7 @@ struct callback_set {
         fn_cb_dataless message_resuming;
         fn_cb_dataless message_pausing;
         fn_cb_packet message_packet;
+	fn_cb_packet message_meta_packet;
         fn_cb_result message_result;
         fn_cb_first_packet message_first_packet;
         fn_cb_tick message_tick_count;
@@ -315,6 +327,9 @@ struct libtrace_t {
 	/** The snap length to be applied to all packets read by the trace - 
 	 * used only if the capture format does not support snapping natively */
 	size_t snaplen;			
+        /** Speed up the packet rate when using trace_event() to process trace
+         * files by this factor. */
+        int replayspeedup;
 	/** Count of the number of packets returned to the libtrace user */
 	uint64_t accepted_packets;
 	/** Count of the number of packets filtered by libtrace */
@@ -332,8 +347,12 @@ struct libtrace_t {
 	libtrace_err_t err;
 	/** Boolean flag indicating whether the trace has been started */
 	bool started;
+        /** Number of times this trace has been started */
+        int startcount;
 	/** Synchronise writes/reads across this format object and attached threads etc */
 	pthread_mutex_t libtrace_lock;
+	/** Packet read lock, seperate from libtrace_lock as to not block while reading a burst */
+	pthread_mutex_t read_packet_lock;
 	/** State */
 	enum trace_state state;
 	/** Use to control pausing threads and finishing threads etc always used with libtrace_lock */
@@ -352,6 +371,7 @@ struct libtrace_t {
 	/** The hasher function - NULL implies they don't care or balance */
 	fn_hasher hasher;
 	void *hasher_data;
+        enum hash_owner hasher_owner;
 	/** The pread_packet choosen path for the configuration */
 	int (*pread)(libtrace_t *, libtrace_thread_t *, libtrace_packet_t **, size_t);
 
@@ -431,48 +451,6 @@ void trace_set_err_out(libtrace_out_t *trace, int errcode, const char *msg,...)
  * @param packet	The libtrace packet that requires a cache reset
  */
 void trace_clear_cache(libtrace_packet_t *packet);
-
-/** Converts the data provided in buffer into a valid libtrace packet
- *
- * @param trace		An input trace of the same format as the "packet" 
- * 			contained in the buffer
- * @param packet	The libtrace packet to prepare
- * @param buffer	A buffer containing the packet data, including the
- * 			capture format header
- * @param rt_type	The RT type for the packet that is being prepared
- * @param flags		Used to specify options for the preparation function,
- * 			e.g. who owns the packet buffer
- *
- * @return -1 if an error occurs, 0 otherwise 
- *
- * Packet preparation is a tricky concept - the idea is to take the data
- * pointed to by 'buffer' and treat it as a packet record of the same capture
- * format as that used by the input trace. The provided libtrace packet then
- * has its internal pointers and values set to describe the packet record in
- * the buffer. 
- *
- * The primary use of this function is to allow the RT packet reader to 
- * easily and safely convert packets from the RT format back into the format
- * that they were originally captured with., essentially removing the RT
- * encapsulation.
- *
- * We've decided not to make this function available via the exported API 
- * because there are several issues that can arise if it is not used very
- * carefully and it is not very useful outside of internal contexts anyway.
- */
-int trace_prepare_packet(libtrace_t *trace, libtrace_packet_t *packet,
-		void *buffer, libtrace_rt_types_t rt_type, uint32_t flags);
-
-/** Flags for prepare_packet functions */
-enum {
-	/** The buffer memory has been allocated by libtrace and should be
-	 * freed when the packet is destroyed. */
-	TRACE_PREP_OWN_BUFFER		=1,
-	
-	/** The buffer memory is externally-owned and must not be freed by 
-	 * libtrace when the packet is destroyed. */
-	TRACE_PREP_DO_NOT_OWN_BUFFER	=0
-};
 
 
 #ifndef PF_RULESET_NAME_SIZE
@@ -613,7 +591,7 @@ struct libtrace_format_t {
 	 * @param packet	The libtrace packet to read into
 	 * @return The size of the packet read (in bytes) including the capture
 	 * framing header, or -1 if an error occurs. 0 is returned in the
-	 * event of an EOF. 
+	 * event of an EOF or -2 in the case of interrupting the parallel API.
 	 *
 	 * If no packets are available for reading, this function should block
 	 * until one appears or return 0 if the end of a trace file has been
@@ -658,6 +636,13 @@ struct libtrace_format_t {
 	 * @return The number of bytes written, or -1 if an error occurs
 	 */
 	int (*write_packet)(libtrace_out_t *libtrace, libtrace_packet_t *packet);
+
+        /** Flush any buffered output for an output trace.
+         *
+         * @param libtrace      The output trace to be flushed
+         */
+        int (*flush_output)(libtrace_out_t *libtrace);
+
 	/** Returns the libtrace link type for a packet.
 	 *
 	 * @param packet 	The packet to get the link type for
@@ -747,6 +732,21 @@ struct libtrace_format_t {
 	 */
 	double (*get_seconds)(const libtrace_packet_t *packet);
 	
+	/** Parses all meta-data fields in a meta packet and places them
+         *  into an array for user inspection.
+         *  @param packet       The meta packet to be parsed.
+         *  @return A pointer to a libtrace_meta_t containing all of the
+         *          meta-data fields found in the provided packet, or NULL
+         *          if no meta-data fields were found in the packet.
+         *
+         *  @note the returned libtrace_meta_t must be freed using
+         *        trace_destroy_meta()
+         *
+         *  Only implement for formats that include meta-data records
+         *  within the captured packet stream.
+	 */
+	libtrace_meta_t *(*get_all_meta)(libtrace_packet_t *packet);
+
 	/** Moves the read pointer to a certain ERF timestamp within an input 
 	 * trace file.
 	 *
@@ -1040,6 +1040,24 @@ struct libtrace_format_t {
  */
 extern volatile int libtrace_halt;
 
+/**
+ * Used by a format to check if trace_interrupt or if a trace_pause/stop has
+ * been called. Provides backwards compatibility with traditional read
+ * functions when trace_read_packet() is used by the parallel API.
+ *
+ * Returns -1 if not halting otherwise returns the code that the read
+ * operation should pass on.
+ */
+static inline int is_halted(libtrace_t *trace) {
+	if (!(libtrace_halt || trace->state == STATE_PAUSING)) {
+		return -1;
+	} else if (libtrace_halt) {
+		return READ_EOF;
+	} else {
+		return READ_MESSAGE;
+	}
+}
+
 /** Registers a new capture format module.
  *
  * @param format	The format module to be registered
@@ -1067,6 +1085,20 @@ libtrace_linktype_t pcap_linktype_to_libtrace(libtrace_dlt_t linktype);
  * @return The RT type that is equivalent to the provided DLT
  */
 libtrace_rt_types_t pcap_linktype_to_rt(libtrace_dlt_t linktype);
+
+/** Converts a PCAP-NG DLT into an RT protocol type.
+ *
+ * @param linktype	The PCAP DLT to be converted
+ * @return The RT type that is equivalent to the provided DLT
+ */
+libtrace_rt_types_t pcapng_linktype_to_rt(libtrace_dlt_t linktype);
+
+/** Converts a TZSP DLT into an RT protocol type.
+ *
+ * @param linktype      The TZSP DLT to be converted
+ * @return The RT type that is equivalent to the provided DLT
+ */
+libtrace_rt_types_t tzsp_linktype_to_rt(libtrace_dlt_t linktype);
 
 /** Converts a libtrace link type into a PCAP linktype.
  *
@@ -1113,6 +1145,14 @@ libtrace_linktype_t erf_type_to_libtrace(uint8_t erf);
  * or -1 if the link type cannot be matched to an ERF type.
  */
 uint8_t libtrace_to_erf_type(libtrace_linktype_t linktype);
+
+/** Converts a libtrace link type into an TZSP type.
+ *
+ * @param linktype      The libtrace link type to be converted
+ * @return The TZSP type that is equivalent to the provided libtrace link type,
+ * or -1 if the link type cannot be matched to an TZSP type.
+ */
+uint8_t libtrace_to_tzsp_type(libtrace_linktype_t linktype);
 
 /** Converts an ARPHRD type into a libtrace link type.
  *
@@ -1201,7 +1241,6 @@ void *trace_get_payload_from_linux_sll(const void *link,
 DLLEXPORT void *trace_get_payload_from_atm(void *link, uint8_t *type, 
 		uint32_t *remaining);
 
-
 #ifdef HAVE_BPF
 /* A type encapsulating a bpf filter
  * This type covers the compiled bpf filter, as well as the original filter
@@ -1248,12 +1287,20 @@ void linuxring_constructor(void);
 void pcap_constructor(void);
 /** Constructor for the PCAP File format module */
 void pcapfile_constructor(void);
+/** Constructor for the PCAP-NG File format module */
+void pcapng_constructor(void);
 /** Constructor for the RT format module */
 void rt_constructor(void);
 /** Constructor for the DUCK format module */
 void duck_constructor(void);
 /** Constructor for the ATM Header format module */
 void atmhdr_constructor(void);
+/** Constructor for the network DAG format module */
+void ndag_constructor(void);
+/** Constructor for the live ETSI over TCP format module */
+void etsilive_constructor(void);
+/** Constructor for the live TZSP over UDP format module */
+void tzsplive_constructor(void);
 #ifdef HAVE_BPF
 /** Constructor for the BPF format module */
 void bpf_constructor(void);
@@ -1261,6 +1308,14 @@ void bpf_constructor(void);
 #if HAVE_DPDK
 /** Constructor for Intels DPDK format module */
 void dpdk_constructor(void);
+
+/** Constructor for receiving network DAG via Intels DPDK format module */
+void dpdkndag_constructor(void);
+
+#endif
+#if HAVE_LIBBPF
+/** Constructor for AF_XDP format module */
+void linux_xdp_constructor(void);
 #endif
 //ODP support
 /** Constructor for the ODP format module */

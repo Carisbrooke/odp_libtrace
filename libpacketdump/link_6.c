@@ -1,3 +1,28 @@
+/*
+ *
+ * Copyright (c) 2007-2016 The University of Waikato, Hamilton, New Zealand.
+ * All rights reserved.
+ *
+ * This file is part of libtrace.
+ *
+ * This code has been developed by the University of Waikato WAND
+ * research group. For further information please see http://www.wand.net.nz/
+ *
+ * libtrace is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * libtrace is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *
+ */
 /* 
  * Linux SLL Decoder 
  * 
@@ -59,7 +84,7 @@ DLLEXPORT void decode(int link_type ,const char *pkt,unsigned len)
 	/* Decide how to continue processing... */
 	
 	/* Do we recognise the hardware address type? */
-	ret=trace_get_payload_from_meta(pkt, &linktype, &len);
+        ret=trace_get_payload_from_meta(pkt, &linktype, &len);
 	
 	if (ntohs(sll->hatype) == LIBTRACE_ARPHRD_ETHER || 
 				ntohs(sll->hatype) == LIBTRACE_ARPHRD_LOOPBACK) { 
@@ -68,9 +93,9 @@ DLLEXPORT void decode(int link_type ,const char *pkt,unsigned len)
 			decode_next(ret, len, "link", 
 				arphrd_type_to_libtrace(ntohs(sll->hatype)));
 		}
-		else
-			decode_next(pkt + sizeof(*sll), len - sizeof(*sll), 
-					"eth", ntohs(sll->protocol));
+		else if (ret) {
+			decode_next(ret, len, "eth", ntohs(sll->protocol));
+                }
 	}
 	else {
 		decode_next(ret, len, "link", 
