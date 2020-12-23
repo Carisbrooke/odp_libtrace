@@ -444,7 +444,6 @@ enum base_format_t {
 	TRACE_FORMAT_PARQ         =27,
 	TRACE_FORMAT_KAFKA        =28,
 	TRACE_FORMAT_ACCE         =29,
-        TRACE_FORMAT_PCAPNG       =30,    /**< PCAP-NG trace file */
 };
 
 /** RT protocol packet types */
