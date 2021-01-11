@@ -105,7 +105,7 @@ XDP_SOURCES=
 endif
 
 #ODP support
-NATIVEFORMATS+= format_odp.c format_parquet.c format_kafka.c format_accelio.c
+NATIVEFORMATS+= format_odp.c format_parquet.c format_kafka.c 
 
 libtrace_la_SOURCES = trace.c trace_parallel.c common.h \
 		format_pktmeta.c format_erf.c format_pcap.c format_legacy.c \

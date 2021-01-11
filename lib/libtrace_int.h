@@ -1322,7 +1322,7 @@ void linux_xdp_constructor(void);
 void odp_constructor(void);
 void kafka_constructor(void);
 void parq_constructor(void);
-void acce_constructor(void);
+// void acce_constructor(void);
 
 
 /** Extracts the RadioTap flags from a wireless link header

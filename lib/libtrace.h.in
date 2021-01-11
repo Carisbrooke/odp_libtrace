@@ -431,7 +431,6 @@ enum base_format_t {
 	TRACE_FORMAT_LEGACY_NZIX  =14,	/**< Legacy format used for NZIX traces */
 	TRACE_FORMAT_LINUX_RING	  =15,	/**< Linux native interface capture PACKET_MMAP */
 	TRACE_FORMAT_RAWERF	  =16,	/**< Special format for reading uncompressed ERF traces without checking for compression */
-<<<<<<< HEAD
     	TRACE_FORMAT_DPDK     	  =17, /**< The Intel Data Plane Development Kit format */
         TRACE_FORMAT_PCAPNG       =18,    /**< PCAP-NG trace file */
         TRACE_FORMAT_NDAG         =19,    /**< DAG multicast over a network */
@@ -442,16 +441,9 @@ enum base_format_t {
         TRACE_FORMAT_CORSAROTAG   =24,  /** Corsarotagger format */
         TRACE_FORMAT_XDP          =25,  /** AF_XDP format */
 	TRACE_FORMAT_ODP          =26,  /** Open Data Plane develop Kit format */
-=======
-    	TRACE_FORMAT_DPDK	  =17, /**< The Intel Data Plane Development Kit format */
-	TRACE_FORMAT_ODP          =18,
-	TRACE_FORMAT_PARQ         =19,
-	TRACE_FORMAT_KAFKA        =20,
-	TRACE_FORMAT_ACCE         =21,
-        TRACE_FORMAT_PCAPNG       =22,    /**< PCAP-NG trace file */
-        TRACE_FORMAT_NDAG         =23,    /**< DAG multicast over a network */
-	TRACE_FORMAT_DPDK_NDAG    =24,    /**< DAG multicast over a network, received via DPDK */
->>>>>>> remotes/origin/bleedingedge
+	TRACE_FORMAT_PARQ         =27,
+	TRACE_FORMAT_KAFKA        =28,
+	TRACE_FORMAT_ACCE         =29,
 };
 
 /** RT protocol packet types */
@@ -509,7 +501,6 @@ typedef enum {
 	TRACE_RT_DATA_DPDK=TRACE_RT_DATA_SIMPLE+TRACE_FORMAT_DPDK,
 	/** ODP support */
 	TRACE_RT_DATA_ODP=TRACE_RT_DATA_SIMPLE+TRACE_FORMAT_ODP,
-<<<<<<< HEAD
 	/** RT is encapsulating a etsilive capture record */
         TRACE_RT_DATA_ETSILI = TRACE_RT_DATA_SIMPLE + TRACE_FORMAT_ETSILIVE,
 	/** RT is encapsulating a tzsplive capture record */
@@ -518,10 +509,8 @@ typedef enum {
 	TRACE_RT_DATA_CORSARO_TAGGED = TRACE_RT_DATA_SIMPLE + TRACE_FORMAT_CORSAROTAG,
         /** RT is encapsulating a packet tagged by AF_XDP */
         TRACE_RT_DATA_XDP = TRACE_RT_DATA_SIMPLE + TRACE_FORMAT_XDP,
-=======
 	TRACE_RT_DATA_KAFKA=TRACE_RT_DATA_SIMPLE+TRACE_FORMAT_KAFKA,
 	TRACE_RT_DATA_ACCE=TRACE_RT_DATA_SIMPLE+TRACE_FORMAT_ACCE,
->>>>>>> remotes/origin/bleedingedge
 
 	/** As PCAP does not store the linktype with the packet, we need to 
 	 * create a separate RT type for each supported DLT, starting from
@@ -1546,7 +1535,6 @@ DLLEXPORT int trace_set_event_realtime(libtrace_t *trace, bool realtime);
  * Note, this must be kept in sync with TRACE_OPTION_COMPRESSTYPE_* numbers in wandio.h
  */ 
 typedef enum {
-<<<<<<< HEAD
 	TRACE_OPTION_COMPRESSTYPE_NONE = 0, /**< No compression */
 	TRACE_OPTION_COMPRESSTYPE_ZLIB = 1, /**< GZip Compression */
 	TRACE_OPTION_COMPRESSTYPE_BZ2  = 2, /**< BZip2 Compression */
@@ -1554,30 +1542,16 @@ typedef enum {
 	TRACE_OPTION_COMPRESSTYPE_LZMA  = 4,  /**< LZMA Compression */
 	TRACE_OPTION_COMPRESSTYPE_ZSTD  = 5,  /**< zstd Compression */
 	TRACE_OPTION_COMPRESSTYPE_LZ4  = 6,  /**< lz4 Compression */
-        TRACE_OPTION_COMPRESSTYPE_LAST
-=======
-        /** No compression */
-        TRACE_OPTION_COMPRESSTYPE_NONE    = 0,
-        /** Zlib compression */
-        TRACE_OPTION_COMPRESSTYPE_ZLIB    = 1,
-        /** Bzip compression */
-        TRACE_OPTION_COMPRESSTYPE_BZ2     = 2,
-        /** LZO compression */
-        TRACE_OPTION_COMPRESSTYPE_LZO     = 3,
-        /** LZMA compression */
-        TRACE_OPTION_COMPRESSTYPE_LZMA    = 4,
-        /** HWZLIB compression */
-        TRACE_OPTION_COMPRESSTYPE_HWZLIB  = 5,
+        TRACE_OPTION_COMPRESSTYPE_HWZLIB  = 7, /** HWZLIB compression */
         // BLOSC TYPES OF COMPRESSION       
-        TRACE_OPTION_COMPRESSTYPE_BLOSC_BLOSCLZ   = 6,
-        TRACE_OPTION_COMPRESSTYPE_BLOSC_LZ4       = 7,
-        TRACE_OPTION_COMPRESSTYPE_BLOSC_LZ4HC     = 8,
-        TRACE_OPTION_COMPRESSTYPE_BLOSC_SNAPPY    = 9,
-        TRACE_OPTION_COMPRESSTYPE_BLOSC_ZLIB      = 10,
-        TRACE_OPTION_COMPRESSTYPE_BLOSC_ZSTD      = 11,
+        TRACE_OPTION_COMPRESSTYPE_BLOSC_BLOSCLZ   = 8,
+        TRACE_OPTION_COMPRESSTYPE_BLOSC_LZ4       = 9,
+        TRACE_OPTION_COMPRESSTYPE_BLOSC_LZ4HC     = 10,
+        TRACE_OPTION_COMPRESSTYPE_BLOSC_SNAPPY    = 11,
+        TRACE_OPTION_COMPRESSTYPE_BLOSC_ZLIB      = 12,
+        TRACE_OPTION_COMPRESSTYPE_BLOSC_ZSTD      = 13,
         /** All supported methods - used as a bitmask */
-        TRACE_OPTION_COMPRESSTYPE_LAST    = 15         
->>>>>>> remotes/origin/bleedingedge
+        TRACE_OPTION_COMPRESSTYPE_LAST    = 14         
 } trace_option_compresstype_t;
 
 /** Valid configuration options for output traces */

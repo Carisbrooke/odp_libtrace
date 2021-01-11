@@ -25,6 +25,7 @@ ltmain.sh
 missing
 stamp-h1
 docs/libtrace.doxygen
+docs/doxygen
 examples/parallel/network_capture
 examples/parallel/timedemo
 examples/parallel/trivial_skeleton
@@ -51,6 +52,7 @@ examples/tutorial/readdemo
 examples/tutorial/sourcedemo
 examples/tutorial/timedemo
 examples/tutorial/writedemo
+examples/tutorial/layer2-headers
 lib/.dirstamp
 lib/data-struct/.dirstamp
 lib/libtrace.h
@@ -106,6 +108,7 @@ tools/tracesplit/tracesplit
 tools/tracesplit/tracesplit_dir
 tools/tracestats/tracestats
 tools/tracetop/tracetop
+tools/tracemcast/tracemcast
 ylwrap
 <<<<<<< HEAD
 

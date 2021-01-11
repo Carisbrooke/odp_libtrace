@@ -1,38 +1,3 @@
-Skip to content
-Search or jump to…
-
-Pull requests
-Issues
-Marketplace
-Explore
- 
-@Carisbrooke 
-Carisbrooke
-/
-odp_libtrace_working
-forked from repu1sion/odp_libtrace
-1
-🔖 Custom notification settings
-Looking for a little more control? Now you can choose which types of activity you’d like to be notified about per repository.
-
-02
-Code
-Pull requests
-Actions
-Projects
-Wiki
-Security
-Insights
-Settings
-odp_libtrace_working/lib/format_odp.c
-
-root set odp input queues to 4. add odp_init_local() call from every threa…
-…
-Latest commit 815fcba on 1 Mar 2018
- History
- 1 contributor
-1078 lines (905 sloc)  32.1 KB
- 
 /* format odp support 
  *
  */
@@ -53,6 +18,8 @@ Latest commit 815fcba on 1 Mar 2018
 #include "rt_protocol.h"
 
 #include <odp_api.h>
+#include <odp/helper/odph_api.h>
+
 //#include <odp/helper/linux.h>
 //#include <odp/helper/eth.h>
 //#include <odp/helper/ip.h>
@@ -75,6 +42,16 @@ Latest commit 815fcba on 1 Mar 2018
 #else
  #define debug(x...)
 #endif
+
+#define MODE_SCHED
+//#define MODE_QUEUE
+
+#ifdef MODE_SCHED
+        #undef MODE_QUEUE
+#endif
+
+
+
 
 struct odp_format_data_t {
 	odp_instance_t odp_instance;
@@ -154,8 +131,8 @@ static int lodp_init_environment(char *uridata, struct odp_format_data_t *format
         odp_pktio_param_t pktio_param;
         odp_pktin_queue_param_t pktin_param;
 	odp_pktio_capability_t capa;
-	char devname[] = "1";		// - IMPORTANT - this is dpdk port number, should be 0! Only digits accepted!
-	//char dpdk_params[256] = {0};
+	char devname[] = "0";		// - IMPORTANT - this is dpdk port number, should be 0! Only digits accepted! Can be 1 for Mellnox NICs
+	char dpdk_params[256] = {0};
 	char *odp_error = "No error";
 
 	debug("%s() \n", __func__);
@@ -198,12 +175,11 @@ static int lodp_init_environment(char *uridata, struct odp_format_data_t *format
 
 	//forming params -------------------------------------------------------
 	printf("uridata: %s \n", uridata);
-/*
-	strcpy(dpdk_params, "-c 0xF -n 4 -w ");
-	strcat(dpdk_params, uridata);
-	printf("dpdk params passed: %s \n", dpdk_params);
-*/
 
+	// strcpy(dpdk_params, "-c 0xF -n 4 -w ");
+	//strcpy(dpdk_params, "-c 0xF ");
+	strcat(dpdk_params, uridata);
+	printf("dpdk params passed: %s \n", dpdk_params); 
 
 	/* This allows the user to specify the core - we would try to do this
 	 * automatically but it's hard to tell that this is secondary
@@ -223,8 +199,8 @@ static int lodp_init_environment(char *uridata, struct odp_format_data_t *format
 	//@second param - odp params, @third param - dpdk params (passed through)
 	//const odp_platform_init_t *platform_params
 	// The handle is used in other calls (e.g. odp_init_local()) as a reference to the instance
-        //if (odp_init_global(&format_data->odp_instance, NULL, (odp_platform_init_t*)dpdk_params))
-        if (odp_init_global(&format_data->odp_instance, NULL, NULL))
+        if (odp_init_global(&format_data->odp_instance, NULL, (odp_platform_init_t*)dpdk_params))
+        //if (odp_init_global(&format_data->odp_instance, NULL, NULL))
 	{
                 fprintf(stderr, "Error: ODP global init failed.\n");
                 exit(EXIT_FAILURE);
@@ -258,11 +234,23 @@ static int lodp_init_environment(char *uridata, struct odp_format_data_t *format
 	else 
                 fprintf(stdout, "packet pool have been created.\n");
 
+        odp_sys_info_print();
+
         //----- setting up pktio ------------------------------------------------------
 
         //setting pktio_param
         odp_pktio_param_init(&pktio_param);
+
+#ifdef MODE_SCHED
         pktio_param.in_mode = ODP_PKTIN_MODE_SCHED;
+	odp_schedule_config(NULL);
+	printf("setting sched mode\n");
+#elif defined MODE_QUEUE
+        pktio_param.in_mode = ODP_PKTIN_MODE_QUEUE;
+        printf("setting queue mode\n");
+#endif
+
+        pktio_param.out_mode = ODP_PKTIN_MODE_DIRECT;
 
         /* Open a packet IO instance */
 	fprintf(stdout, "calling odp_pktio_open()\n");
@@ -272,21 +260,31 @@ static int lodp_init_environment(char *uridata, struct odp_format_data_t *format
                 return 1;
         }
 
-	if (odp_pktio_capability(format_data->pktio, &capa)) 
+	 if (odp_pktio_capability(format_data->pktio, &capa)) 
 	{
 		printf("Error: capability query failed \n");
 		return 1;
-        }
+        } 
 
-	printf("max input queues: %d \n", (int)capa.max_input_queues);
+	odp_pktio_promisc_mode_set (format_data->pktio, 1);
+
+	odp_pktio_print(format_data->pktio);
+
+	printf("format-odp: max input queues: %d \n", (int)capa.max_input_queues);
 
         //setting queue param
         odp_pktin_queue_param_init(&pktin_param);
 	pktin_param.op_mode     = ODP_PKTIO_OP_MT;
-	pktin_param.hash_enable = 0;
+	// pktin_param.hash_enable = 0;
+	pktin_param.hash_enable = 1;
 	pktin_param.num_queues  = n_odp_workers;
-        pktin_param.queue_param.sched.sync = ODP_SCHED_SYNC_ATOMIC;
-        pktin_param.queue_param.sched.prio = ODP_SCHED_PRIO_DEFAULT;
+#ifdef MODE_SCHED
+        //pktin_param.queue_param.sched.sync = ODP_SCHED_SYNC_ATOMIC;
+        pktin_param.queue_param.sched.sync = ODP_SCHED_SYNC_ORDERED;
+        pktin_param.queue_param.sched.prio = ODP_SCHED_PRIO_HIGHEST;
+	pktin_param.queue_param.sched.group = ODP_SCHED_GROUP_ALL;
+#endif
+	printf("Dom\n");
 
 	//configure in queue
         if (odp_pktin_queue_config(format_data->pktio, &pktin_param))
@@ -295,11 +293,14 @@ static int lodp_init_environment(char *uridata, struct odp_format_data_t *format
                 return 1;
         }
 
+	printf("Dom2\n");
+
         //set OUT queue. NULL as param means default values will be used
         if (odp_pktout_queue_config(format_data->pktio, NULL))
                 fprintf(stderr, "Error: pktout config failed\n");
 
 	return 0;
+
 }
 
 /* Initialises an input trace using the capture format. 
@@ -415,6 +416,11 @@ static int lodp_start_input(libtrace_t *libtrace)
         printf("  created pktio:%02ld, queue mode\n default pktio%02ld-INPUT queue\n",
                 (long)(FORMAT(libtrace)->pktio), (long)(FORMAT(libtrace)->pktio));
 
+#ifdef MODE_QUEUE
+        ret = odp_pktin_event_queue(pktio, inq, n_odp_workers);
+        printf("num of input queues configured: %d \n", ret);
+#endif
+	
 	return 0;
 }
 
@@ -577,8 +583,11 @@ static int lodp_read_pack(libtrace_t *libtrace)
                 /* Use schedule to get buf from any input queue. 
 		   Waits infinitely for a new event with ODP_SCHED_WAIT param. */
 		//debug("%s() - waiting for packet!\n", __func__);
+#ifdef MODE_QUEUE
+                ev = odp_queue_deq(inq[thread_id]);
+#elif defined MODE_SCHED
                 ev = odp_schedule(NULL, ODP_SCHED_NO_WAIT); //no wait here
-
+#endif
 		//if we got Ctrl-C from one of our utilities, etc
 		if (libtrace_halt)
 		{
@@ -666,10 +675,10 @@ static int lodp_read_packet(libtrace_t *libtrace, libtrace_packet_t *packet)
 	if (!packet->buffer || packet->buf_control == TRACE_CTRL_EXTERNAL) 
 	{
 		packet->buffer = FORMAT(libtrace)->pkt;
-		packet->capture_length = FORMAT(libtrace)->pkt_len;
+		packet->cached.capture_length = FORMAT(libtrace)->pkt_len;
 		//part below moved from lodp_prepare_packet()
 		packet->payload = FORMAT(libtrace)->l2h; 
-		packet->wire_length = FORMAT(libtrace)->pkt_len + WIRELEN_DROPLEN;
+		packet->cached.wire_length = FORMAT(libtrace)->pkt_len + WIRELEN_DROPLEN;
 		//-----
 		debug("pointer to packet: %p \n", packet->buffer);
                 if (!packet->buffer) 
@@ -697,8 +706,11 @@ static int lodp_pread_pack(libtrace_t *libtrace UNUSED, libtrace_thread_t *t)
                 /* Use schedule to get buf from any input queue. 
 		   Waits infinitely for a new event with ODP_SCHED_WAIT param. */
 		//debug("%s() - waiting for packet!\n", __func__);
+#ifdef MODE_QUEUE
+                ev = odp_queue_deq(inq[thread_id]);
+#elif defined MODE_SCHED
                 ev = odp_schedule(NULL, ODP_SCHED_NO_WAIT); //no wait here
-
+#endif
 		//if we got Ctrl-C from one of our utilities, etc
 		if (libtrace_halt)
 		{
@@ -798,9 +810,9 @@ static int lodp_pread_packets(libtrace_t *trace, libtrace_thread_t *t, libtrace_
 		if (!packets[i]->buffer || packets[i]->buf_control == TRACE_CTRL_EXTERNAL) 
 		{
 			packets[i]->buffer = stream->pkt; 
-			packets[i]->capture_length = stream->pkt_len;
+			packets[i]->cached.capture_length = stream->pkt_len;
 			packets[i]->payload = stream->l2h; 
-			packets[i]->wire_length = stream->pkt_len + WIRELEN_DROPLEN;
+			packets[i]->cached.wire_length = stream->pkt_len + WIRELEN_DROPLEN;
 			packets[i]->trace = trace;
 			packets[i]->error = 1;
 			debug("pointer to packet: %p \n", packets[i]->buffer);
@@ -880,7 +892,7 @@ static int lodp_get_capture_length(const libtrace_packet_t *packet)
 		// this won't work probably, as we don't set packet->length anywhere, so can't return it.
 		//pkt_len = (int)trace_get_capture_length(packet);
 		//pkt_len = FORMAT(libtrace)->pkt_len;
-		pkt_len = packet->capture_length;
+		pkt_len = packet->cached.capture_length;
 		debug("packet: %p , length: %d\n", packet, pkt_len);
 		return pkt_len;
 	}
@@ -913,7 +925,7 @@ static int lodp_get_wire_length(const libtrace_packet_t *packet)
 
 	if (packet)
 		//return trace_get_wire_length(packet);
-		return packet->wire_length;
+		return packet->cached.wire_length;
 	else
 	{
 		trace_set_err(packet->trace,TRACE_ERR_BAD_PACKET, "Have no packet");
@@ -1073,6 +1085,7 @@ static struct libtrace_format_t lodp = {
         lodp_prepare_packet,		/* prepare_packet - Converts a buffer containing a packet record into a libtrace packet */
 	lodp_fin_packet,                /* fin_packet - Frees any resources allocated for a libtrace packet */
         lodp_write_packet,              /* write_packet - Write a libtrace packet to an output trace */
+	NULL,				/* flush_output */
         lodp_get_link_type,    		/* get_link_type - Returns the libtrace link type for a packet */
         NULL,              		/* get_direction */
         NULL,              		/* set_direction */
@@ -1084,6 +1097,7 @@ static struct libtrace_format_t lodp = {
         NULL,                   	/* seek_erf */
         NULL,                           /* seek_timeval */
         NULL,                           /* seek_seconds */
+	NULL,				/* get_meta_section */
         lodp_get_capture_length,  	/* get_capture_length */
         lodp_get_wire_length,  		/* get_wire_length */
         lodp_get_framing_length, 	/* get_framing_length */

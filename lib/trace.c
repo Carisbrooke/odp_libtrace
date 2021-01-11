@@ -164,7 +164,6 @@ static void trace_init(void)
 	odp_constructor();
 	parq_constructor();
 	kafka_constructor();
-	acce_constructor();
 	}
 }
 
