@@ -96,7 +96,8 @@ AC_SYS_LARGEFILE
 
 LIBPKTDUMP_LIBS="-ltrace "
 ADD_LDFLAGS="$ADD_LDFLAGS -L\$(abs_top_srcdir)/lib"
-LIBTRACE_LIBS="-lodp-linux -lrdkafka -lrte_ring -lrte_pmd_ring"
+#LIBTRACE_LIBS="-lodp-dpdk -lrdkafka -lrte_ring -lrte_pmd_ring"
+LIBTRACE_LIBS="-lodp-dpdk -lrdkafka"
 TOOLS_LIBS=""
 
 CFLAGS="$CFLAGS -Wall -Wmissing-prototypes -Wextra -DLT_BUILDING_DLL=1"

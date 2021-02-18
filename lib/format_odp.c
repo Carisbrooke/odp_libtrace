@@ -120,6 +120,7 @@ static int parse_pciaddr(char *str, struct rte_pci_addr *addr, long *core)
 
 static int lodp_init_environment(char *uridata, struct odp_format_data_t *format_data, char *err, int errlen)
 {
+	//int n_odp_workers = 1;
 	int n_odp_workers = 4;
 	//int i;
 	//int ret; //returned error codes
